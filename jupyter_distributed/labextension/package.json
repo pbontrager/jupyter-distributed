@@ -24,6 +24,7 @@
     "@jupyterlab/application": "^4.0.0",
     "@jupyterlab/apputils": "^4.0.0",
     "@jupyterlab/coreutils": "^6.6.3",
+    "@jupyterlab/debugger": "^4.0.0",
     "@jupyterlab/docregistry": "^4.0.0",
     "@jupyterlab/notebook": "^4.0.0",
     "@jupyterlab/rendermime": "^4.0.0",
@@ -42,7 +43,7 @@
     "extension": true,
     "outputDir": "jupyter_distributed/labextension",
     "_build": {
-      "load": "static/remoteEntry.0e8f7a4ead1f58c95d25.js",
+      "load": "static/remoteEntry.893e232b0983f010042c.js",
       "extension": "./extension",
       "style": "./style"
     }

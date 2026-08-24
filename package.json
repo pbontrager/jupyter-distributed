@@ -24,6 +24,7 @@
     "@jupyterlab/application": "^4.0.0",
     "@jupyterlab/apputils": "^4.0.0",
     "@jupyterlab/coreutils": "^6.6.3",
+    "@jupyterlab/debugger": "^4.0.0",
     "@jupyterlab/docregistry": "^4.0.0",
     "@jupyterlab/notebook": "^4.0.0",
     "@jupyterlab/rendermime": "^4.0.0",

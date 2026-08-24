@@ -533,6 +533,30 @@
     "@lumino/signaling" "^2.1.5"
     yjs "^13.5.40"
 
+"@jupyterlab/console@^4.6.3":
+  version "4.6.3"
+  resolved "https://registry.yarnpkg.com/@jupyterlab/console/-/console-4.6.3.tgz#3ed12829dd0107719ca422788f439c117c036f37"
+  integrity sha512-5fDHJ+VVozzRW3QQgZ8hqKx996u0jOIWOajKpk9PacNY6bXKTNuBDcsLmzRxMvx4jN6I7DwquOwf8MqZyC9DEg==
+  dependencies:
+    "@jupyter/ydoc" "^4.0.0"
+    "@jupyterlab/apputils" "^4.7.3"
+    "@jupyterlab/cells" "^4.6.3"
+    "@jupyterlab/codeeditor" "^4.6.3"
+    "@jupyterlab/codemirror" "^4.6.3"
+    "@jupyterlab/coreutils" "^6.6.3"
+    "@jupyterlab/nbformat" "^4.6.3"
+    "@jupyterlab/observables" "^5.6.3"
+    "@jupyterlab/rendermime" "^4.6.3"
+    "@jupyterlab/services" "^7.6.3"
+    "@jupyterlab/translation" "^4.6.3"
+    "@jupyterlab/ui-components" "^4.6.3"
+    "@lumino/coreutils" "^2.2.2"
+    "@lumino/disposable" "^2.1.5"
+    "@lumino/dragdrop" "^2.1.8"
+    "@lumino/messaging" "^2.0.4"
+    "@lumino/signaling" "^2.1.5"
+    "@lumino/widgets" "^2.8.0"
+
 "@jupyterlab/coreutils@^6.6.3":
   version "6.6.3"
   resolved "https://registry.yarnpkg.com/@jupyterlab/coreutils/-/coreutils-6.6.3.tgz#2b5b9359fc56f10a6046510464d9ec0fec900c8a"
@@ -544,6 +568,43 @@
     minimist "~1.2.0"
     path-browserify "^1.0.0"
     url-parse "~1.5.4"
+
+"@jupyterlab/debugger@^4.0.0":
+  version "4.6.3"
+  resolved "https://registry.yarnpkg.com/@jupyterlab/debugger/-/debugger-4.6.3.tgz#e50e059e41b8d44385a5d6886fee99c5930b4d9e"
+  integrity sha512-AV9G5jDdpIVtadD/ts5DbgqZB8f1jvva4M2qxHFX5l+Ol6bK98oU3K064Uqyhi/4rJVss7cqEZh5wkBS4r7pog==
+  dependencies:
+    "@codemirror/state" "^6.5.4"
+    "@codemirror/view" "^6.39.14"
+    "@jupyter/react-components" "^0.16.6"
+    "@jupyter/ydoc" "^4.0.0"
+    "@jupyterlab/application" "^4.6.3"
+    "@jupyterlab/apputils" "^4.7.3"
+    "@jupyterlab/cells" "^4.6.3"
+    "@jupyterlab/codeeditor" "^4.6.3"
+    "@jupyterlab/codemirror" "^4.6.3"
+    "@jupyterlab/console" "^4.6.3"
+    "@jupyterlab/coreutils" "^6.6.3"
+    "@jupyterlab/docregistry" "^4.6.3"
+    "@jupyterlab/fileeditor" "^4.6.3"
+    "@jupyterlab/notebook" "^4.6.3"
+    "@jupyterlab/observables" "^5.6.3"
+    "@jupyterlab/rendermime" "^4.6.3"
+    "@jupyterlab/services" "^7.6.3"
+    "@jupyterlab/settingregistry" "^4.6.3"
+    "@jupyterlab/translation" "^4.6.3"
+    "@jupyterlab/ui-components" "^4.6.3"
+    "@lumino/algorithm" "^2.0.4"
+    "@lumino/commands" "^2.3.3"
+    "@lumino/coreutils" "^2.2.2"
+    "@lumino/datagrid" "^2.5.7"
+    "@lumino/disposable" "^2.1.5"
+    "@lumino/messaging" "^2.0.4"
+    "@lumino/polling" "^2.1.5"
+    "@lumino/signaling" "^2.1.5"
+    "@lumino/widgets" "^2.8.0"
+    "@vscode/debugprotocol" "^1.51.0"
+    react "^18.2.0"
 
 "@jupyterlab/docmanager@^4.6.3":
   version "4.6.3"
@@ -636,6 +697,31 @@
     "@lumino/widgets" "^2.8.0"
     react "^18.2.0"
 
+"@jupyterlab/fileeditor@^4.6.3":
+  version "4.6.3"
+  resolved "https://registry.yarnpkg.com/@jupyterlab/fileeditor/-/fileeditor-4.6.3.tgz#70e559eab09e8a89318224c708cd063a680dc94b"
+  integrity sha512-CshG1tqWURuRQqg4NuwSC1C/+Pf3J0Bp/5h41s6mRN+OV1IV6JdJk/E3FafyYVRFChlBwHr9l55Wp1qOIQbfqQ==
+  dependencies:
+    "@jupyter/ydoc" "^4.0.0"
+    "@jupyterlab/apputils" "^4.7.3"
+    "@jupyterlab/codeeditor" "^4.6.3"
+    "@jupyterlab/codemirror" "^4.6.3"
+    "@jupyterlab/coreutils" "^6.6.3"
+    "@jupyterlab/docregistry" "^4.6.3"
+    "@jupyterlab/documentsearch" "^4.6.3"
+    "@jupyterlab/lsp" "^4.6.3"
+    "@jupyterlab/rendermime" "^4.6.3"
+    "@jupyterlab/statusbar" "^4.6.3"
+    "@jupyterlab/toc" "^6.6.3"
+    "@jupyterlab/translation" "^4.6.3"
+    "@jupyterlab/ui-components" "^4.6.3"
+    "@lumino/commands" "^2.3.3"
+    "@lumino/coreutils" "^2.2.2"
+    "@lumino/messaging" "^2.0.4"
+    "@lumino/widgets" "^2.8.0"
+    react "^18.2.0"
+    regexp-match-indices "^1.0.2"
+
 "@jupyterlab/lsp@^4.6.3":
   version "4.6.3"
   resolved "https://registry.yarnpkg.com/@jupyterlab/lsp/-/lsp-4.6.3.tgz#103a4c4dd4bce402625d696e60c59b43a1338de8"
@@ -692,7 +778,7 @@
   dependencies:
     "@lumino/coreutils" "^2.2.2"
 
-"@jupyterlab/notebook@^4.0.0":
+"@jupyterlab/notebook@^4.0.0", "@jupyterlab/notebook@^4.6.3":
   version "4.6.3"
   resolved "https://registry.yarnpkg.com/@jupyterlab/notebook/-/notebook-4.6.3.tgz#577a84f267a113b9214a8bfebdc26f6d6e264cee"
   integrity sha512-Hw0ry9lkI31Ack8thh3LDsUgUcFpbo6ZbnCEG4mZ6SftNEYDs5fPf2wHvrXYxRBEmxibOQ78EKtYBs7hvVsQkw==
@@ -1068,6 +1154,21 @@
   integrity sha512-YxmayMeq8VJCPqo1okpsA3oOoz0eZeG5qedOLmopm+N/GwQT7S34QPPts49omVUwTJ0Xo8fGzOsxnS/LwnVl1Q==
   dependencies:
     "@lumino/algorithm" "^2.0.5"
+
+"@lumino/datagrid@^2.5.7":
+  version "2.5.8"
+  resolved "https://registry.yarnpkg.com/@lumino/datagrid/-/datagrid-2.5.8.tgz#24129ecc81e3913c829f8e4af554f0d1018cb67f"
+  integrity sha512-5uZEaI86AK+Tl+8pL8XOk85Hqy+OocIRuDoJNxWvnR3cNicn567Sm8waOUKnOs4r2KP0oTriIrbmM42OUsYyqw==
+  dependencies:
+    "@lumino/algorithm" "^2.0.5"
+    "@lumino/coreutils" "^2.2.3"
+    "@lumino/disposable" "^2.1.6"
+    "@lumino/domutils" "^2.0.5"
+    "@lumino/dragdrop" "^2.1.9"
+    "@lumino/keyboard" "^2.0.5"
+    "@lumino/messaging" "^2.0.5"
+    "@lumino/signaling" "^2.1.6"
+    "@lumino/widgets" "^2.9.0"
 
 "@lumino/disposable@^1.10.0 || ^2.0.0", "@lumino/disposable@^2.1.0", "@lumino/disposable@^2.1.5", "@lumino/disposable@^2.1.6":
   version "2.1.6"
@@ -1478,6 +1579,11 @@
   optionalDependencies:
     d3-selection "^3.0.0"
     d3-transition "^3.0.1"
+
+"@vscode/debugprotocol@^1.51.0":
+  version "1.68.0"
+  resolved "https://registry.yarnpkg.com/@vscode/debugprotocol/-/debugprotocol-1.68.0.tgz#e558ba6affe1be7aff4ec824599f316b61d9a69d"
+  integrity sha512-2J27dysaXmvnfuhFGhfeuxfHRXunqNPxtBoR3koiTOA9rdxWNDTa1zIFLCFMSHJ9MPTPKFcBeblsyaCJCIlQxg==
 
 "@webassemblyjs/ast@1.14.1", "@webassemblyjs/ast@^1.14.1":
   version "1.14.1"
@@ -3129,6 +3235,18 @@ rechoir@^0.8.0:
   integrity sha512-/vxpCXddiX8NGfGO/mTafwjq4aFa/71pvamip0++IQk3zG8cbCj0fifNPrjjF1XMXUne91jL9OoxmdykoEtifQ==
   dependencies:
     resolve "^1.20.0"
+
+regexp-match-indices@^1.0.2:
+  version "1.0.2"
+  resolved "https://registry.yarnpkg.com/regexp-match-indices/-/regexp-match-indices-1.0.2.tgz#cf20054a6f7d5b3e116a701a7b00f82889d10da6"
+  integrity sha512-DwZuAkt8NF5mKwGGER1EGh2PRqyvhRhhLviH+R8y8dIuaQROlUfXjt4s9ZTXstIsSkptf06BSvwcEmmfheJJWQ==
+  dependencies:
+    regexp-tree "^0.1.11"
+
+regexp-tree@^0.1.11:
+  version "0.1.27"
+  resolved "https://registry.yarnpkg.com/regexp-tree/-/regexp-tree-0.1.27.tgz#2198f0ef54518ffa743fe74d983b56ffd631b6cd"
+  integrity sha512-iETxpjK6YoRWJG5o6hXLwvjYAoW+FEZn9os0PD/b6AP6xQwsa/Y7lCVgIixBbUPMfhu+i2LtdeAqVTgGlQarfA==
 
 require-from-string@^2.0.2:
   version "2.0.2"

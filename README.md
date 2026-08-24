@@ -46,11 +46,16 @@ notebook breakpoint is installed in every process. Continue, pause, step over,
 step in, and step out apply to all paused processes together, while stack frames
 and variables are inspected for the selected rank thread.
 
+While paused, use the **Rank** section in the debugger sidebar to choose which
+process supplies the Calls and Variables views. JupyterLab's existing debug
+console follows the same selected rank. Open it with **Debugger: Evaluate Code**
+from the Command Palette and run expressions with `Shift+Enter`.
+
 This is the first-stage debugging interface: ranks appear as threads in
 JupyterLab's existing debugger panel rather than in dedicated rank tabs.
 Python's built-in `breakpoint()` also works in notebook cells and imported
 libraries once the JupyterLab debugger is active. Without an attached debugger,
-it is ignored instead of starting competing `pdb` sessions.
+it prints a warning instead of starting competing `pdb` sessions.
 
 ## Computation model
 

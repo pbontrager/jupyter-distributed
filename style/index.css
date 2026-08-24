@@ -22,6 +22,26 @@
   width: 4em;
 }
 
+.jp-JupyterDistributedDebuggerRank {
+  box-sizing: border-box;
+  padding: 8px 12px;
+}
+
+.jp-JupyterDistributedDebuggerRank label {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.jp-JupyterDistributedDebuggerRank select {
+  background: var(--jp-layout-color1);
+  border: 1px solid var(--jp-border-color1);
+  border-radius: 2px;
+  color: var(--jp-ui-font-color1);
+  flex: 1;
+  min-width: 0;
+}
+
 .jp-JupyterDistributedRankOutput-tabs {
   align-items: end;
   border-bottom: 1px solid var(--jp-border-color2);

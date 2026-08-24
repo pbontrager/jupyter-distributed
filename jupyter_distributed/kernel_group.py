@@ -189,7 +189,7 @@ class DistributedKernelGroup:
             "JAX_NUM_PROCESSES": str(self.world_size),
         }
         if self.world_size > 1:
-            env["PYTHONBREAKPOINT"] = "debugpy.breakpoint"
+            env["PYTHONBREAKPOINT"] = "jupyter_distributed.breakpoint.distributed_breakpoint"
         return env
 
     def _require_started(self) -> None:

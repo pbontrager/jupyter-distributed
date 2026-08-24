@@ -48,9 +48,24 @@ class RankKernel:
         try:
             await client.wait_for_ready(timeout=self.ready_timeout)
             self._iopub_task = asyncio.create_task(self._route_iopub())
+            await self._install_breakpoint_hook()
         except BaseException:
             await self.shutdown(now=True)
             raise
+
+    async def _install_breakpoint_hook(self) -> None:
+        if (
+            int(self.env["WORLD_SIZE"]) <= 1
+            or str(self.manager.kernel_spec.language).lower() != "python"
+        ):
+            return
+        await self.execute(
+            "import sys\n"
+            "from jupyter_distributed.breakpoint import distributed_breakpoint\n"
+            "sys.breakpointhook = distributed_breakpoint",
+            silent=True,
+            store_history=False,
+        )
 
     async def execute(
         self,

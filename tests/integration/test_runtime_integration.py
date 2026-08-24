@@ -53,10 +53,11 @@ async def test_two_rank_environment_state_outputs_errors_and_restart() -> None:
 
         unattached_breakpoint = await group.execute("breakpoint(); 'still running'")
         assert unattached_breakpoint.status == "ok"
-        assert [output_text(rank) for rank in unattached_breakpoint.ranks] == [
-            "'still running'",
-            "'still running'",
-        ]
+        assert all(
+            "enable the notebook debugger and run the cell again" in output_text(rank)
+            for rank in unattached_breakpoint.ranks
+        )
+        assert all("'still running'" in output_text(rank) for rank in unattached_breakpoint.ranks)
 
         old_ranks = tuple(group.ranks)
         await group.restart(1)
@@ -199,8 +200,18 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
             ):
                 stopped_threads.append(message["content"]["body"]["threadId"])
 
+        debug_info = await debug_through_proxy(client, 5, "debugInfo")
+        assert set(debug_info["body"]["stoppedThreads"]) == set(stopped_threads)
+        threads = await debug_through_proxy(client, 6, "threads")
+        assert {
+            thread["name"].split(":", 1)[0]
+            for thread in threads["body"]["threads"]
+            if thread["id"] in stopped_threads
+        } == {"Rank 0", "Rank 1"}
+
         rank_values: set[str] = set()
-        for sequence, thread_id in enumerate(stopped_threads, start=5):
+        evaluated_values: set[str] = set()
+        for sequence, thread_id in enumerate(stopped_threads, start=7):
             stack = await debug_through_proxy(
                 client,
                 sequence,
@@ -228,7 +239,19 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
                 for variable in variables["body"]["variables"]
                 if variable["name"] == "debug_value"
             )
+            evaluated = await debug_through_proxy(
+                client,
+                sequence + 30,
+                "evaluate",
+                {
+                    "expression": "debug_value * 100",
+                    "frameId": frames[0]["id"],
+                    "context": "repl",
+                },
+            )
+            evaluated_values.add(evaluated["body"]["result"])
         assert rank_values == {"0", "1"}
+        assert evaluated_values == {"0", "100"}
 
         stepped = await debug_through_proxy(
             client,
