@@ -12,7 +12,7 @@ requires-python = ">=3.10"
 authors = [
   { name = "Jupyter Distributed contributors" },
 ]
-keywords = ["jupyter", "jupyterlab", "pytorch", "distributed", "spmd"]
+keywords = ["jupyter", "jupyterlab", "pytorch", "jax", "distributed", "spmd"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Framework :: Jupyter",

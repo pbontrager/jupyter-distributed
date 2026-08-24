@@ -82,11 +82,15 @@ The selected runtime remains responsible for communication between processes.
 The execution protocol is designed to support any kernelspec, but the current
 implementation has only been tested with Python kernels.
 
-## PyTorch Distributed
+## PyTorch and JAX Distributed
 
-Jupyter Distributed is not specific to PyTorch, but it was built with
-`torch.distributed` as a flagship use case. To make that workflow convenient,
-each process receives torchrun-compatible environment variables:
+Jupyter Distributed is framework agnostic, but PyTorch and JAX distributed
+workloads are flagship use cases.
+
+### PyTorch
+
+To make `torch.distributed` convenient, each process receives
+torchrun-compatible environment variables:
 
 - `RANK`
 - `LOCAL_RANK`
@@ -120,6 +124,30 @@ os.environ["MASTER_PORT"] = "29501"
 PyTorch's process-group timeout applies to outstanding collective operations,
 not idle time between notebook cells, so normal interactive pauses do not
 require a longer timeout.
+
+### JAX
+
+JAX processes additionally receive:
+
+- `JAX_COORDINATOR_ADDRESS`
+- `JAX_PROCESS_ID`
+- `JAX_NUM_PROCESSES`
+
+These values can be passed directly to JAX's standard initialization API:
+
+```python
+import os
+import jax
+
+jax.distributed.initialize(
+    coordinator_address=os.environ["JAX_COORDINATOR_ADDRESS"],
+    process_id=int(os.environ["JAX_PROCESS_ID"]),
+    num_processes=int(os.environ["JAX_NUM_PROCESSES"]),
+)
+```
+
+Device visibility and any framework-specific distributed configuration remain
+the notebook's responsibility.
 
 ## Demos
 

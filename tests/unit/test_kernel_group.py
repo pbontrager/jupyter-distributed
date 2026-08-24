@@ -49,7 +49,7 @@ def fake_rank_kernel(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_sets_torchrun_compatible_rank_environment() -> None:
+async def test_start_sets_distributed_rank_environment() -> None:
     group = DistributedKernelGroup(2, env={"EXTRA": "yes"})
     await group.start()
 
@@ -58,8 +58,19 @@ async def test_start_sets_torchrun_compatible_rank_environment() -> None:
     assert {rank.env["LOCAL_WORLD_SIZE"] for rank in group.ranks} == {"2"}
     assert {rank.env["MASTER_ADDR"] for rank in group.ranks} == {"127.0.0.1"}
     assert {rank.env["MASTER_PORT"] for rank in group.ranks} == {"23456"}
+    assert {rank.env["JAX_COORDINATOR_ADDRESS"] for rank in group.ranks} == {"127.0.0.1:23456"}
+    assert [rank.env["JAX_PROCESS_ID"] for rank in group.ranks] == ["0", "1"]
+    assert {rank.env["JAX_NUM_PROCESSES"] for rank in group.ranks} == {"2"}
     assert all(rank.env["EXTRA"] == "yes" for rank in group.ranks)
     assert all("PYTHONBREAKPOINT" in rank.env for rank in group.ranks)
+
+
+@pytest.mark.asyncio
+async def test_jax_coordinator_address_brackets_ipv6_hosts() -> None:
+    group = DistributedKernelGroup(1, master_addr="::1", master_port=23456)
+    await group.start()
+
+    assert group.ranks[0].env["JAX_COORDINATOR_ADDRESS"] == "[::1]:23456"
 
 
 @pytest.mark.asyncio

@@ -155,6 +155,11 @@ class DistributedKernelGroup:
         )
 
     def _rank_env(self, rank: int, port: int) -> dict[str, str]:
+        coordinator_host = (
+            f"[{self.master_addr}]"
+            if ":" in self.master_addr and not self.master_addr.startswith("[")
+            else self.master_addr
+        )
         env = {
             **self.base_env,
             "RANK": str(rank),
@@ -163,6 +168,9 @@ class DistributedKernelGroup:
             "LOCAL_WORLD_SIZE": str(self.world_size),
             "MASTER_ADDR": self.master_addr,
             "MASTER_PORT": str(port),
+            "JAX_COORDINATOR_ADDRESS": f"{coordinator_host}:{port}",
+            "JAX_PROCESS_ID": str(rank),
+            "JAX_NUM_PROCESSES": str(self.world_size),
         }
         if self.world_size > 1:
             env["PYTHONBREAKPOINT"] = "jupyter_distributed.breakpoint.distributed_breakpoint"

@@ -119,11 +119,15 @@ WORLD_SIZE
 LOCAL_WORLD_SIZE
 MASTER_ADDR
 MASTER_PORT
+JAX_COORDINATOR_ADDRESS
+JAX_PROCESS_ID
+JAX_NUM_PROCESSES
 ```
 
-These variables are convenient for torchrun-compatible libraries but do not
-initialize a process group or impose a framework. All ranks currently reside on
-one machine, so global and local rank values are identical.
+The first six variables are torchrun compatible. The JAX variables expose the
+same local rendezvous and rank information for `jax.distributed.initialize`.
+They do not initialize a process group or impose a framework. All ranks
+currently reside on one machine, so global and local rank values are identical.
 
 ## Execution and output semantics
 
@@ -164,11 +168,11 @@ when the frontend extension is unavailable.
 - Python `breakpoint()` is disabled in distributed mode instead of opening
   competing debugger sessions.
 
-## PyTorch Distributed boundary
+## Distributed framework boundary
 
-PyTorch is optional. The extension provides torchrun-compatible environment
-variables, but the notebook must initialize and manage its own process groups
-through the standard PyTorch API.
+PyTorch and JAX are optional. The extension provides convenient environment
+variables for both, but the notebook must initialize and manage its own process
+groups through the frameworks' standard APIs.
 
 There is deliberately no implicit `torch.distributed.barrier()` after a cell.
 Cell completion is coordinated over Jupyter's control path, independently of
