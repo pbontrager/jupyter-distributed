@@ -1,9 +1,10 @@
 # Jupyter Distributed
 
-Jupyter Distributed makes one notebook behave like one persistent, multi-process Python
-kernel. Select a process count, run an ordinary cell, and the same code executes
-concurrently on every rank. Each rank keeps its own Python state between cells,
-while JupyterLab presents the group as a single kernel with rank-aware output.
+Jupyter Distributed makes one notebook behave like one persistent,
+multi-process kernel. Select your normal Python, Julia, or other Jupyter kernel,
+choose a process count, and ordinary cells execute concurrently on every rank.
+Each rank keeps its own state between cells while JupyterLab presents the group
+as one logical kernel with rank-aware output.
 
 This repository is an early single-node MVP for JupyterLab 4 and PyTorch
 distributed. It is intended for interactive DeviceMesh/DTensor, tensor
@@ -27,14 +28,9 @@ Gloo development, enable the optional dependency set:
 uv sync --extra distributed
 ```
 
-The wheel installs and enables the server extension and registers the
-`Jupyter Distributed` (`jupyter-distributed`) kernelspec. To repair or intentionally install the
-kernelspec into another Jupyter environment:
-
-```bash
-uv run jupyter-distributed-install-kernelspec --prefix .venv
-uv run jupyter kernelspec list
-```
+The wheel installs the server extension and prebuilt JupyterLab extension. It
+does not register a kernelspec: existing kernels remain the source of runtime,
+environment, language, and startup customization.
 
 For CUDA work, ensure the uv environment resolves the PyTorch build appropriate
 for the machine before launching Lab. The project deliberately does not force a
@@ -44,8 +40,8 @@ the desired build into the uv environment.
 
 ## Core workflow
 
-1. Start Lab with `uv run jupyter lab` and create a normal notebook using
-   **Jupyter Distributed**.
+1. Start Lab with `uv run jupyter lab` and create a notebook using your normal
+   kernel, such as **Python 3**.
 2. Leave **Processes: 1** for normal single-process work, or choose 2, 4, or 8.
    Changing it restarts the complete kernel group and clears
    in-memory state.
@@ -87,25 +83,28 @@ never arrive can still time out or hang, and a group restart may be required.
 JupyterLab extension
   Processes selector + rank-aware output
              |
-Logical proxy kernel
-  SPMD fanout, rank lifecycle, and independent control plane
+Jupyter Server extension
+  remembers the selected kernelspec and owns group configuration
              |
-Distributed kernel group
-  rank 0 | rank 1 | ... | rank N-1
+Internal logical proxy (only for Processes > 1)
+             |
+selected kernel rank 0 | rank 1 | ... | rank N-1
 ```
 
-The MVP proxy kernel fans each execution request out to persistent rank kernels
-and waits for all ranks to finish, error, or be interrupted before reporting
-logical idle. This notebook-level coordination does not inject a
+At process count 1, Jupyter launches the selected kernel normally. At larger
+process counts, the server restarts the same logical kernel ID through an
+internal proxy and launches N copies of the selected kernelspec. The original
+kernel name remains visible in the notebook UI. The proxy fans each execution
+request out and waits for all ranks to finish, error, or be interrupted before
+reporting logical idle. This notebook-level coordination does not inject a
 `torch.distributed.barrier()` and remains separate from the user's NCCL/Gloo
 process groups. Rank processes receive the usual torchrun environment:
 `RANK`, `LOCAL_RANK`, `WORLD_SIZE`, `LOCAL_WORLD_SIZE`, `MASTER_ADDR`, and
 `MASTER_PORT`.
 
-The bundled server extension is the integration foundation for future
-session-owned lifecycle and exposes an authenticated health endpoint at
-`/jupyter-distributed/health` beneath the configured Jupyter base URL. In the current
-MVP it does not own rank processes; the logical proxy kernel does.
+The server exposes authenticated lifecycle endpoints beneath
+`/jupyter-distributed/kernels/<kernel-id>` and a health endpoint at
+`/jupyter-distributed/health`.
 
 ## Development
 
@@ -131,7 +130,7 @@ uv build
 Use `uv run jupyter lab` from the checkout for manual testing. Frontend changes
 may require rebuilding with `uv run jlpm build` and refreshing Lab. The Python
 package includes a prebuilt Lab extension directory when one is present, so a
-wheel contains the server, runtime, kernelspec, and frontend in one
+wheel contains the server, internal runtime, and frontend in one
 distribution.
 
 CPU/Gloo tests cover the portable runtime path. GPU/NCCL behavior, model
@@ -161,6 +160,10 @@ long-lived environment.
   supported.
 - One notebook maps to one logical group; arbitrary rank-targeted execution is
   not a primary workflow.
+- The generic fanout path works with any kernelspec, but language-specific
+  multi-process communication remains the user's responsibility.
+- Comm-based widgets and interactive debuggers are not yet forwarded through
+  the distributed proxy.
 - Regular `input()` is not supported by the MVP rank workers; executions reject
   stdin instead of allowing multiple ranks to compete for the notebook channel.
 - An ordinary Python error is reported per rank without intentionally killing

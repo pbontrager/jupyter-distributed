@@ -49,7 +49,11 @@ one logical distributed kernel
 rank 0 | rank 1 | ... | rank N-1
 ```
 
-The initial runtime should be built directly around **torchrun-style process launch + persistent IPython/ipykernel rank processes**.
+Do not expose a project-owned kernelspec. The user selects an existing
+kernelspec, and process count is an independent property applied by the server.
+At world size 1 the selected kernel runs directly. At larger world sizes the
+server launches persistent copies of that same kernelspec behind one logical
+session.
 
 This avoids carrying two overlapping notions of distributed identity (`ipyparallel engine_id` and `torch rank`) and avoids an impedance-matching layer where the notebook is technically attached to a controller kernel while the meaningful Python state lives elsewhere.
 
@@ -70,9 +74,9 @@ Jupyter Server extension
         v
 Distributed kernel launcher / proxy
         |
-        | torchrun-compatible launch semantics
+        | selected kernelspec + torchrun-compatible environment
         v
-rank 0 ipykernel  rank 1 ipykernel ... rank N-1 ipykernel
+rank 0 kernel  rank 1 kernel ... rank N-1 kernel
 ```
 
 ### 3.1 JupyterLab frontend extension
@@ -140,11 +144,14 @@ class DistributedKernelGroup:
     async def status(self) -> GroupStatus: ...
 ```
 
-Each rank is an ordinary persistent Python/IPython kernel process, but the notebook-facing abstraction is the group.
+Each rank is an ordinary persistent instance of the user's selected Jupyter
+kernel, but the notebook-facing abstraction is the group.
 
 ### 3.4 Torchrun-style launcher
 
-For `world_size > 1`, launch all rank kernels as one coherent distributed world rather than starting unrelated kernels and patching rendezvous state after the fact.
+For `world_size > 1`, launch all rank kernels from the selected kernelspec as
+one coherent distributed world rather than asking the user to select a custom
+proxy kernelspec.
 
 Each process should receive the standard distributed environment, including at minimum:
 
@@ -157,16 +164,14 @@ MASTER_ADDR
 MASTER_PORT
 ```
 
-The rank process entry point should start a persistent ipykernel-compatible Python interpreter after torchrun has assigned rank environment.
+The server-side launcher may use an internal proxy for Jupyter message fanout,
+but that proxy is an implementation detail. It must preserve the selected
+kernelspec's name and configuration in the notebook UI.
 
-The implementation can either:
-
-- invoke `torch.distributed.run` / `torchrun` as a subprocess around a custom rank-kernel entrypoint; or
-- use equivalent torch elastic launch APIs programmatically if that proves cleaner and stable.
-
-Prefer the simplest robust approach for the first version.
-
-The system must **not** automatically choose a PyTorch parallelism strategy. It creates an SPMD Python world. User code may then initialize DeviceMesh, TP, EP, FSDP, DDP, custom collectives, etc.
+The system must **not** automatically choose a language-specific distributed
+runtime or parallelism strategy. It creates a persistent SPMD process group.
+User code may initialize PyTorch DeviceMesh, TP, EP, FSDP, Julia distributed
+primitives, or any other runtime-specific communication mechanism.
 
 ---
 

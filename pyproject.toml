@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "jupyter-distributed"
 version = "0.1.0"
-description = "A persistent multi-process SPMD kernel for JupyterLab"
+description = "Run a selected Jupyter kernel as persistent parallel processes"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
@@ -33,9 +33,6 @@ dependencies = [
 [project.optional-dependencies]
 distributed = ["torch>=2.4"]
 
-[project.scripts]
-jupyter-distributed-install-kernelspec = "jupyter_distributed.kernelspec:main"
-
 [dependency-groups]
 dev = [
   "build>=1.2",
@@ -51,7 +48,6 @@ artifacts = ["jupyter_distributed/labextension/**"]
 
 [tool.hatch.build.targets.wheel.shared-data]
 "jupyter-config/jupyter_server_config.d/jupyter_distributed.json" = "etc/jupyter/jupyter_server_config.d/jupyter_distributed.json"
-"jupyter-config/kernels/jupyter-distributed/kernel.json" = "share/jupyter/kernels/jupyter-distributed/kernel.json"
 "jupyter_distributed/labextension" = "share/jupyter/labextensions/jupyter-distributed"
 
 [tool.pytest.ini_options]
