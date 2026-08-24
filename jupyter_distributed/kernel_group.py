@@ -6,7 +6,7 @@ import asyncio
 import os
 import socket
 from collections.abc import Mapping
-from typing import Any, Literal, Self
+from typing import Any, Literal
 
 from .protocol import GroupExecution, GroupStatus
 from .rank_kernel import DebugEventCallback, OutputCallback, RankKernel
@@ -196,7 +196,7 @@ class DistributedKernelGroup:
         if not self._ranks:
             raise RuntimeError("kernel group is not started")
 
-    async def __aenter__(self) -> Self:
+    async def __aenter__(self) -> DistributedKernelGroup:
         await self.start()
         return self
 
