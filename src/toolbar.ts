@@ -24,7 +24,7 @@ export class WorldSizeState {
 class ProcessSelector extends Widget {
   constructor(panel: NotebookPanel, state: WorldSizeState) {
     super({ node: Private.createNode() });
-    this.addClass('jp-SpmdProcessSelector');
+    this.addClass('jp-JupyterDistributedProcessSelector');
     this._panel = panel;
     this._state = state;
     this._select = this.node.querySelector('select')!;
@@ -134,8 +134,14 @@ export class ProcessToolbarExtension
     context: DocumentRegistry.IContext<INotebookModel>
   ): IDisposable {
     const selector = new ProcessSelector(panel, this._state);
-    if (!panel.toolbar.insertAfter('kernelName', 'spmd-processes', selector)) {
-      panel.toolbar.addItem('spmd-processes', selector);
+    if (
+      !panel.toolbar.insertAfter(
+        'kernelName',
+        'jupyter-distributed-processes',
+        selector
+      )
+    ) {
+      panel.toolbar.addItem('jupyter-distributed-processes', selector);
     }
     return new DisposableDelegate(() => selector.dispose());
   }
@@ -150,8 +156,8 @@ namespace Private {
     const select = document.createElement('select');
 
     text.textContent = 'Processes:';
-    text.className = 'jp-SpmdProcessSelector-label';
-    select.className = 'jp-SpmdProcessSelector-select';
+    text.className = 'jp-JupyterDistributedProcessSelector-label';
+    select.className = 'jp-JupyterDistributedProcessSelector-select';
     select.setAttribute('aria-label', 'Kernel process count');
     for (const size of WORLD_SIZES) {
       const option = document.createElement('option');

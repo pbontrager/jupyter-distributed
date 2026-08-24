@@ -4,7 +4,7 @@ import { IRenderMime } from '@jupyterlab/rendermime-interfaces';
 import { Signal } from '@lumino/signaling';
 import { Panel, Widget } from '@lumino/widgets';
 
-export const MIME_TYPE = 'application/vnd.spmd-jupyter.rank+json';
+export const MIME_TYPE = 'application/vnd.jupyter-distributed.rank+json';
 
 type OutputType =
   | 'stream'
@@ -58,7 +58,7 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
     selections: RankSelectionModel
   ) {
     super();
-    this.addClass('jp-SpmdRankOutput');
+    this.addClass('jp-JupyterDistributedRankOutput');
     this._mimeType = options.mimeType;
     this._rendermime = rendermime;
     this._panel = panel;
@@ -71,7 +71,10 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
     const ranks = Private.normalizePayload(model.data[this._mimeType]);
     if (ranks.length === 0) {
       this.addWidget(
-        Private.textWidget('No rank output was provided.', 'jp-SpmdRankOutput-empty')
+        Private.textWidget(
+          'No rank output was provided.',
+          'jp-JupyterDistributedRankOutput-empty'
+        )
       );
       return;
     }
@@ -83,7 +86,7 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
       : this._ranks[0];
 
     const tabs = new Widget({ node: document.createElement('div') });
-    tabs.addClass('jp-SpmdRankOutput-tabs');
+    tabs.addClass('jp-JupyterDistributedRankOutput-tabs');
     tabs.node.setAttribute('role', 'tablist');
     this.addWidget(tabs);
 
@@ -92,7 +95,7 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
       button.type = 'button';
       button.textContent = `Rank ${rank.rank}`;
       button.dataset.rank = String(rank.rank);
-      button.className = 'jp-SpmdRankOutput-tab';
+      button.className = 'jp-JupyterDistributedRankOutput-tab';
       button.setAttribute('role', 'tab');
       if (rank.error) {
         button.classList.add('jp-mod-error');
@@ -105,7 +108,7 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
       tabs.node.appendChild(button);
 
       const content = new Panel();
-      content.addClass('jp-SpmdRankOutput-rank');
+      content.addClass('jp-JupyterDistributedRankOutput-rank');
       content.node.dataset.rank = String(rank.rank);
       content.node.setAttribute('role', 'tabpanel');
       this.addWidget(content);
@@ -147,8 +150,8 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
         Private.textWidget(
           text,
           output.name === 'stderr'
-            ? 'jp-SpmdRankOutput-stderr'
-            : 'jp-SpmdRankOutput-stdout'
+            ? 'jp-JupyterDistributedRankOutput-stderr'
+            : 'jp-JupyterDistributedRankOutput-stdout'
         )
       );
       return;
@@ -160,7 +163,7 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
       parent.addWidget(
         Private.textWidget(
           traceback || summary || 'Unknown error',
-          'jp-SpmdRankOutput-error'
+          'jp-JupyterDistributedRankOutput-error'
         )
       );
       return;
@@ -172,7 +175,7 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
       parent.addWidget(
         Private.textWidget(
           JSON.stringify(data, null, 2),
-          'jp-SpmdRankOutput-plain'
+          'jp-JupyterDistributedRankOutput-plain'
         )
       );
       return;
@@ -335,7 +338,7 @@ namespace Private {
     const node = document.createElement('pre');
     node.textContent = text;
     const widget = new Widget({ node });
-    widget.addClass('jp-SpmdRankOutput-text');
+    widget.addClass('jp-JupyterDistributedRankOutput-text');
     widget.addClass(className);
     return widget;
   }

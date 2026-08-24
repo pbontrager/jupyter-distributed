@@ -1,16 +1,16 @@
-.jp-SpmdProcessSelector {
+.jp-JupyterDistributedProcessSelector {
   align-items: center;
   display: flex;
   gap: 4px;
   padding: 0 4px;
 }
 
-.jp-SpmdProcessSelector-label {
+.jp-JupyterDistributedProcessSelector-label {
   color: var(--jp-ui-font-color1);
   font-size: var(--jp-ui-font-size1);
 }
 
-.jp-SpmdProcessSelector-select {
+.jp-JupyterDistributedProcessSelector-select {
   background: var(--jp-layout-color1);
   border: 1px solid var(--jp-border-color1);
   border-radius: 2px;
@@ -18,7 +18,7 @@
   height: 24px;
 }
 
-.jp-SpmdRankOutput-tabs {
+.jp-JupyterDistributedRankOutput-tabs {
   align-items: end;
   border-bottom: 1px solid var(--jp-border-color2);
   display: flex;
@@ -26,7 +26,7 @@
   margin-bottom: 4px;
 }
 
-.jp-SpmdRankOutput-tab {
+.jp-JupyterDistributedRankOutput-tab {
   background: transparent;
   border: 0;
   border-bottom: 2px solid transparent;
@@ -36,25 +36,25 @@
   padding: 3px 8px;
 }
 
-.jp-SpmdRankOutput-tab:hover,
-.jp-SpmdRankOutput-tab.jp-mod-selected {
+.jp-JupyterDistributedRankOutput-tab:hover,
+.jp-JupyterDistributedRankOutput-tab.jp-mod-selected {
   background: var(--jp-layout-color2);
   color: var(--jp-ui-font-color1);
 }
 
-.jp-SpmdRankOutput-tab.jp-mod-selected {
+.jp-JupyterDistributedRankOutput-tab.jp-mod-selected {
   border-bottom-color: var(--jp-brand-color1);
 }
 
-.jp-SpmdRankOutput-tab.jp-mod-error {
+.jp-JupyterDistributedRankOutput-tab.jp-mod-error {
   color: var(--jp-error-color1);
 }
 
-.jp-SpmdRankOutput-tab.jp-mod-error.jp-mod-selected {
+.jp-JupyterDistributedRankOutput-tab.jp-mod-error.jp-mod-selected {
   border-bottom-color: var(--jp-error-color1);
 }
 
-.jp-SpmdRankOutput-text {
+.jp-JupyterDistributedRankOutput-text {
   box-sizing: border-box;
   margin: 0;
   overflow-x: auto;
@@ -62,12 +62,12 @@
   white-space: pre-wrap;
 }
 
-.jp-SpmdRankOutput-stderr,
-.jp-SpmdRankOutput-error {
+.jp-JupyterDistributedRankOutput-stderr,
+.jp-JupyterDistributedRankOutput-error {
   color: var(--jp-error-color1);
 }
 
-.jp-SpmdRankOutput-empty {
+.jp-JupyterDistributedRankOutput-empty {
   color: var(--jp-ui-font-color2);
   font-style: italic;
 }

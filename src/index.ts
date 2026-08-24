@@ -11,8 +11,8 @@ import {
 import { ProcessToolbarExtension, WorldSizeState } from './toolbar';
 
 const plugin: JupyterFrontEndPlugin<void> = {
-  id: 'spmd-jupyter:plugin',
-  description: 'SPMD process controls and rank-aware notebook output',
+  id: 'jupyter-distributed:plugin',
+  description: 'Jupyter Distributed process controls and rank-aware output',
   autoStart: true,
   requires: [INotebookTracker, IRenderMimeRegistry],
   activate: (

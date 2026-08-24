@@ -1,9 +1,9 @@
 {
-  "name": "spmd-jupyter",
+  "name": "jupyter-distributed",
   "version": "0.1.0",
-  "description": "JupyterLab controls and rank-aware output rendering for SPMD kernels",
+  "description": "Jupyter Distributed controls and rank-aware output rendering for SPMD kernels",
   "license": "BSD-3-Clause",
-  "author": "SPMD Jupyter contributors",
+  "author": "Jupyter Distributed contributors",
   "files": [
     "lib/**/*.{js,js.map,d.ts,tsbuildinfo}",
     "style/**/*.css"
@@ -18,7 +18,7 @@
     "build:labextension:dev": "jupyter labextension build . --development True",
     "clean": "jlpm clean:lib && jlpm clean:labextension",
     "clean:lib": "rimraf lib tsconfig.tsbuildinfo",
-    "clean:labextension": "rimraf spmd_jupyter/labextension"
+    "clean:labextension": "rimraf jupyter_distributed/labextension"
   },
   "dependencies": {
     "@jupyterlab/application": "^4.0.0",
@@ -38,6 +38,6 @@
   },
   "jupyterlab": {
     "extension": true,
-    "outputDir": "spmd_jupyter/labextension"
+    "outputDir": "jupyter_distributed/labextension"
   }
 }
