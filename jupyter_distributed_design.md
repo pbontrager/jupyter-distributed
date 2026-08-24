@@ -60,9 +60,10 @@ selected kernel rank 0 ... selected kernel rank N-1
 
 ### JupyterLab extension
 
-The frontend adds a positive-integer **Processes** field to each notebook. It
-uses the authenticated server endpoint at
-`/jupyter-distributed/kernels/<kernel-id>` to read or change the process count.
+The frontend adds a positive-integer **Processes** field to each notebook and a
+rank selector to JupyterLab's debugger sidebar. It uses the authenticated server
+endpoint at `/jupyter-distributed/kernels/<kernel-id>` to read or change the
+process count.
 
 Non-default counts are stored as optional notebook metadata:
 
@@ -86,6 +87,11 @@ there is sufficient width and as a dropdown when the tabs would become too
 narrow. Each cell's rank selection is independent and remains stable while its
 live output is updated.
 
+When the selected kernel supports Jupyter debugging, the frontend's debugger
+rank selector changes which stopped rank supplies the standard Calls,
+Variables, and Debug Console views. Execution controls still apply to the
+complete rank group.
+
 ### Jupyter Server extension
 
 The server owns process-count transitions. When changing from one process to
@@ -104,9 +110,11 @@ The proxy is an implementation detail. It creates a `DistributedKernelGroup`
 containing one persistent child kernel per rank and forwards ordinary execute,
 completion, inspection, interrupt, restart, and shutdown behavior.
 
-The first rank supplies language and kernel metadata. Debugger support is
-reported as unavailable, and unexpected debugger probes receive a valid
-unsupported response rather than raising in the control channel.
+The first rank supplies language and kernel metadata. For kernels that expose
+the Jupyter Debug Adapter Protocol, the proxy presents the child debuggers as
+one logical session. Breakpoint configuration and execution controls are fanned
+out to all ranks, while stack, scope, variable, source, and evaluation requests
+are routed to the rank selected in the frontend.
 
 ### Rank kernels
 
@@ -166,8 +174,8 @@ when the frontend extension is unavailable.
   group is the recovery mechanism.
 - Multi-rank `input()` is rejected rather than allowing processes to compete
   for one stdin channel.
-- Python `breakpoint()` is disabled in distributed mode instead of opening
-  competing debugger sessions.
+- Python `breakpoint()` enters the coordinated debugger when it is attached.
+  Otherwise it prints a warning instead of opening competing `pdb` sessions.
 
 ## Distributed framework boundary
 
@@ -188,7 +196,8 @@ timeout.
 - No elastic world-size changes.
 - No arbitrary rank-targeted execution mode.
 - No stdin routing in distributed mode.
-- No interactive debugger integration.
+- Debugger integration is currently validated with Python/IPython and debugpy;
+  other kernels require compatible Jupyter DAP behavior.
 - No bidirectional comm proxying, so `ipywidgets`, `tqdm.notebook`, and similar
   widget protocols are not supported in distributed mode.
 - No automatic device assignment, collective initialization, sharding, or
@@ -205,7 +214,8 @@ Portable CPU integration tests cover:
 - live streams and output-state updates;
 - rank-specific results and exceptions;
 - interrupt, restart, shutdown, and cleanup;
-- debugger capability probes;
+- two-rank breakpoints, stepping, stack and variable inspection, expression
+  evaluation, and external-library `breakpoint()` calls;
 - a two-rank Gloo collective when PyTorch is installed.
 
 Release testing should additionally cover JupyterLab browser behavior and
@@ -245,8 +255,7 @@ TorchTitan and Transformers distributed APIs evolve quickly.
 - Automatically selecting a parallelism strategy.
 - Automatically initializing or repairing user collectives.
 - Treating individual ranks as separate notebook sessions.
-- Bidirectional widget or debugger multiplexing unless a compelling SPMD use
-  case emerges.
+- Bidirectional widget multiplexing unless a compelling SPMD use case emerges.
 
 ## Demos
 
