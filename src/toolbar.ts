@@ -9,6 +9,10 @@ const WORLD_SIZE_EXPRESSION = 'jupyter_distributed_world_size';
 
 /** World-size choices are scoped to the logical Jupyter session. */
 export class WorldSizeState {
+  has(sessionId: string | undefined): boolean {
+    return sessionId ? this._values.has(sessionId) : false;
+  }
+
   get(sessionId: string | undefined): number {
     return sessionId ? (this._values.get(sessionId) ?? 1) : 1;
   }
@@ -72,6 +76,9 @@ class ProcessSelector extends Widget {
   }
 
   private _onKernelChanged = (): void => {
+    if (this._restoring?.sessionId !== this._sessionId()) {
+      this._restoring = null;
+    }
     this._syncLocal();
     void this._syncFromKernel();
   };
@@ -105,17 +112,76 @@ class ProcessSelector extends Widget {
 
       const expression = reply.content.user_expressions[WORLD_SIZE_EXPRESSION];
       const value = Private.worldSizeFromExpression(expression);
-      if (value !== null) {
+      if (value === null) {
+        return;
+      }
+
+      if (!this._state.has(sessionId)) {
         this._state.set(sessionId, value);
         this._select.value = String(value);
+        this._restoring = null;
+        return;
       }
+
+      const remembered = this._state.get(sessionId);
+      this._select.value = String(remembered);
+      if (value === remembered) {
+        this._restoring = null;
+        return;
+      }
+
+      await this._restoreRememberedWorldSize(kernel, sessionId, remembered);
     } catch {
       // Kernels without the query magic retain the local/default selection.
     }
   }
 
+  private async _restoreRememberedWorldSize(
+    kernel: NonNullable<
+      NonNullable<NotebookPanel['sessionContext']['session']>['kernel']
+    >,
+    sessionId: string,
+    worldSize: number
+  ): Promise<void> {
+    if (
+      this._restoring?.sessionId === sessionId &&
+      this._restoring.worldSize === worldSize
+    ) {
+      return;
+    }
+
+    this._restoring = { sessionId, worldSize };
+    try {
+      const future = kernel.requestExecute({
+        code: `%spmd_world_size ${worldSize}`,
+        silent: true,
+        store_history: false,
+        allow_stdin: false,
+        stop_on_error: true
+      });
+      const reply = await future.done;
+      if (reply.content.status !== 'ok') {
+        throw new Error('The kernel rejected the remembered process count.');
+      }
+      if (
+        this._restoring?.sessionId === sessionId &&
+        this._restoring.worldSize === worldSize
+      ) {
+        this._restoring = null;
+      }
+    } catch {
+      if (
+        this._restoring?.sessionId === sessionId &&
+        this._restoring.worldSize === worldSize
+      ) {
+        this._restoring = null;
+      }
+    }
+  }
+
   private _onChange = async (): Promise<void> => {
-    const previous = this._state.get(this._sessionId());
+    const sessionId = this._sessionId();
+    const previous = this._state.get(sessionId);
     const next = Number(this._select.value);
     this._select.value = String(previous);
 
@@ -139,7 +205,12 @@ class ProcessSelector extends Widget {
     }
 
     const kernel = this._panel.sessionContext.session?.kernel;
-    if (!kernel || kernel.name !== 'jupyter-distributed') {
+    if (
+      !kernel ||
+      kernel.name !== 'jupyter-distributed' ||
+      !sessionId ||
+      sessionId !== this._sessionId()
+    ) {
       await showErrorMessage(
         'Unable to change process count',
         'This notebook is not connected to a Jupyter Distributed kernel.'
@@ -148,6 +219,9 @@ class ProcessSelector extends Widget {
     }
 
     this._select.disabled = true;
+    this._state.set(sessionId, next);
+    this._restoring = { sessionId, worldSize: next };
+    this._select.value = String(next);
     try {
       const future = kernel.requestExecute({
         code: `%spmd_world_size ${next}`,
@@ -167,20 +241,29 @@ class ProcessSelector extends Widget {
             'The kernel rejected the process-count change.'
         );
       }
-      this._state.set(this._sessionId(), next);
-      this._select.value = String(next);
+      if (
+        this._restoring?.sessionId === sessionId &&
+        this._restoring.worldSize === next
+      ) {
+        this._restoring = null;
+      }
     } catch (error) {
+      this._state.set(sessionId, previous);
+      this._restoring = null;
       await showErrorMessage(
         'Unable to change process count',
         error instanceof Error ? error : String(error)
       );
-      this._select.value = String(previous);
+      if (sessionId === this._sessionId()) {
+        this._select.value = String(previous);
+      }
     } finally {
       this._select.disabled = false;
     }
   };
 
   private _panel: NotebookPanel;
+  private _restoring: { sessionId: string; worldSize: number } | null = null;
   private _select: HTMLSelectElement;
   private _state: WorldSizeState;
   private _syncRequest = 0;
