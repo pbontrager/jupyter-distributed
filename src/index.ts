@@ -8,7 +8,7 @@ import {
   RankOutputRenderer,
   RankSelectionModel
 } from './outputRenderer';
-import { ProcessToolbarExtension, WorldSizeState } from './toolbar';
+import { ProcessToolbarExtension } from './toolbar';
 
 const plugin: JupyterFrontEndPlugin<void> = {
   id: 'jupyter-distributed:plugin',
@@ -20,12 +20,11 @@ const plugin: JupyterFrontEndPlugin<void> = {
     notebooks: INotebookTracker,
     rendermime: IRenderMimeRegistry
   ): void => {
-    const worldSizes = new WorldSizeState();
     const rankSelections = new RankSelectionModel();
 
     app.docRegistry.addWidgetExtension(
       'Notebook',
-      new ProcessToolbarExtension(worldSizes)
+      new ProcessToolbarExtension()
     );
 
     const rendererFactory: IRenderMime.IRendererFactory = {

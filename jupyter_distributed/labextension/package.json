@@ -23,10 +23,12 @@
   "dependencies": {
     "@jupyterlab/application": "^4.0.0",
     "@jupyterlab/apputils": "^4.0.0",
+    "@jupyterlab/coreutils": "^6.6.3",
     "@jupyterlab/docregistry": "^4.0.0",
     "@jupyterlab/notebook": "^4.0.0",
     "@jupyterlab/rendermime": "^4.0.0",
     "@jupyterlab/rendermime-interfaces": "^3.8.0",
+    "@jupyterlab/services": "^7.6.3",
     "@lumino/disposable": "^2.1.0",
     "@lumino/signaling": "^2.1.0",
     "@lumino/widgets": "^2.4.0"
@@ -40,9 +42,10 @@
     "extension": true,
     "outputDir": "jupyter_distributed/labextension",
     "_build": {
-      "load": "static/remoteEntry.cebc1d7152a70514a51a.js",
+      "load": "static/remoteEntry.d751a2d104151e0085e5.js",
       "extension": "./extension",
       "style": "./style"
     }
-  }
+  },
+  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
 }
