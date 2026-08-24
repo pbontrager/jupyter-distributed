@@ -10,7 +10,7 @@ readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 authors = [
-  { name = "Jupyter Distributed contributors" },
+  { name = "Philip Bontrager" },
 ]
 keywords = ["jupyter", "jupyterlab", "pytorch", "jax", "distributed", "spmd"]
 classifiers = [
@@ -29,6 +29,10 @@ dependencies = [
   "jupyter-server>=2.14",
   "jupyterlab>=4.2",
 ]
+
+[project.urls]
+Homepage = "https://github.com/pbontrager/jupyter-distributed"
+Issues = "https://github.com/pbontrager/jupyter-distributed/issues"
 
 [dependency-groups]
 dev = [

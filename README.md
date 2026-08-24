@@ -151,17 +151,15 @@ JAX processes additionally receive:
 - `JAX_PROCESS_ID`
 - `JAX_NUM_PROCESSES`
 
-These values can be passed directly to JAX's standard initialization API:
+JAX reads these values directly, so initialization is parallel to the PyTorch
+example:
 
 ```python
-import os
 import jax
 
-jax.distributed.initialize(
-    coordinator_address=os.environ["JAX_COORDINATOR_ADDRESS"],
-    process_id=int(os.environ["JAX_PROCESS_ID"]),
-    num_processes=int(os.environ["JAX_NUM_PROCESSES"]),
-)
+jax.distributed.initialize()
+
+jax.process_index(), jax.process_count()
 ```
 
 Device visibility and any framework-specific distributed configuration remain
