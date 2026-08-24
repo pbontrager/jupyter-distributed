@@ -320,6 +320,10 @@ Processes: [1 v]
 Accept any positive integer and reject empty, fractional, zero, or negative
 values before requesting a restart.
 
+Persist non-default values as `metadata.jupyter_distributed.world_size` in the
+notebook document. Restore that value when the notebook is reopened; ordinary
+Jupyter clients ignore the namespaced metadata when the extension is absent.
+
 Do not call it "parallel kernels" in the primary UI. The user should think of process/world size as a property of the notebook kernel.
 
 ### 7.2 World-size changes

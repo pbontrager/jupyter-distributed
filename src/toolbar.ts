@@ -6,6 +6,8 @@ import { ServerConnection } from '@jupyterlab/services';
 import { DisposableDelegate, IDisposable } from '@lumino/disposable';
 import { Widget } from '@lumino/widgets';
 
+const METADATA_KEY = 'jupyter_distributed';
+
 interface DistributedKernelModel {
   kernel_id: string;
   kernel_name: string;
@@ -25,7 +27,7 @@ class ProcessSelector extends Widget {
     panel.sessionContext.sessionChanged.connect(this._onKernelChanged, this);
     panel.sessionContext.kernelChanged.connect(this._onKernelChanged, this);
     this._syncVisibility();
-    void this._syncFromServer();
+    void this._initialize();
   }
 
   dispose(): void {
@@ -57,12 +59,28 @@ class ProcessSelector extends Widget {
 
   private _onKernelChanged = (): void => {
     this._syncVisibility();
-    void this._syncFromServer();
+    if (this._ready && !this._pending) {
+      void this._syncFromServer();
+    }
   };
+
+  private async _initialize(): Promise<void> {
+    await Promise.all([
+      this._panel.context.ready,
+      this._panel.sessionContext.ready
+    ]);
+    if (this.isDisposed) {
+      return;
+    }
+    this._ready = true;
+    this._syncVisibility();
+    await this._syncFromServer();
+  }
 
   private async _syncFromServer(): Promise<void> {
     const kernelId = this._kernelId();
     const request = ++this._syncRequest;
+    let restoring = false;
     if (!kernelId) {
       return;
     }
@@ -72,9 +90,40 @@ class ProcessSelector extends Widget {
       if (request !== this._syncRequest || kernelId !== this._kernelId()) {
         return;
       }
-      this._setWorldSize(model.world_size);
-    } catch {
+      const savedWorldSize = this._savedWorldSize();
+      if (
+        savedWorldSize === undefined ||
+        savedWorldSize === model.world_size
+      ) {
+        this._setWorldSize(model.world_size);
+        return;
+      }
+
+      this._pending = true;
+      restoring = true;
+      this._syncVisibility();
+      const restored = await this._request(kernelId, 'POST', {
+        world_size: savedWorldSize
+      });
+      if (kernelId === this._kernelId()) {
+        this._setWorldSize(restored.world_size);
+      }
+    } catch (error) {
       // Keep the default value if the server extension is unavailable.
+      if (restoring) {
+        await showErrorMessage(
+          'Unable to restore process count',
+          error instanceof Error ? error : String(error)
+        );
+      }
+    } finally {
+      if (restoring) {
+        this._pending = false;
+        this._syncVisibility();
+        if (kernelId !== this._kernelId()) {
+          void this._syncFromServer();
+        }
+      }
     }
   }
 
@@ -93,7 +142,11 @@ class ProcessSelector extends Widget {
       return;
     }
 
-    if (!kernelId || next === previous) {
+    if (!kernelId) {
+      return;
+    }
+    if (next === previous) {
+      this._saveWorldSize(next);
       return;
     }
 
@@ -120,6 +173,7 @@ class ProcessSelector extends Widget {
       });
       if (kernelId === this._kernelId()) {
         this._setWorldSize(model.world_size);
+        this._saveWorldSize(model.world_size);
       }
     } catch (error) {
       await showErrorMessage(
@@ -130,6 +184,9 @@ class ProcessSelector extends Widget {
     } finally {
       this._pending = false;
       this._syncVisibility();
+      if (kernelId !== this._kernelId()) {
+        void this._syncFromServer();
+      }
     }
   };
 
@@ -145,6 +202,26 @@ class ProcessSelector extends Widget {
       Number.isSafeInteger(worldSize) && worldSize > 0 ? worldSize : 1;
     this._input.value = String(value);
     this._input.dataset.worldSize = String(value);
+  }
+
+  private _savedWorldSize(): number | undefined {
+    const metadata = this._panel.context.model.getMetadata(METADATA_KEY);
+    if (Private.isRecord(metadata)) {
+      const worldSize = metadata.world_size;
+      if (Number.isSafeInteger(worldSize) && Number(worldSize) > 0) {
+        return Number(worldSize);
+      }
+    }
+    return undefined;
+  }
+
+  private _saveWorldSize(worldSize: number): void {
+    const model = this._panel.context.model;
+    if (worldSize === 1) {
+      model.deleteMetadata(METADATA_KEY);
+    } else {
+      model.setMetadata(METADATA_KEY, { world_size: worldSize });
+    }
   }
 
   private async _request(
@@ -177,6 +254,7 @@ class ProcessSelector extends Widget {
 
   private _panel: NotebookPanel;
   private _pending = false;
+  private _ready = false;
   private _input: HTMLInputElement;
   private _syncRequest = 0;
 }
@@ -203,6 +281,10 @@ export class ProcessToolbarExtension
 }
 
 namespace Private {
+  export function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+  }
+
   export function createNode(): HTMLElement {
     const wrapper = document.createElement('label');
     const text = document.createElement('span');

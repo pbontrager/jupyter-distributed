@@ -44,7 +44,10 @@ the desired build into the uv environment.
    kernel, such as **Python 3**.
 2. Leave **Processes: 1** for normal single-process work, or enter any positive
    integer. Changing it restarts the complete kernel group and clears in-memory
-   state.
+   state. Non-default counts are saved under the notebook's namespaced
+   `metadata.jupyter_distributed.world_size` field and restored when the
+   notebook is reopened. Jupyter installations without this extension safely
+   ignore that optional metadata.
 3. Execute ordinary cells with Shift+Enter. Every live rank receives the same
    source concurrently.
 4. Use the output tabs to inspect stdout, rich results, and exceptions from
