@@ -1,4 +1,4 @@
-"""Install and describe the logical SPMD Python kernelspec."""
+"""Install and describe the Jupyter Distributed kernelspec."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from pathlib import Path
 
 from jupyter_client.kernelspec import KernelSpecManager
 
-KERNEL_NAME = "spmd-python"
-DISPLAY_NAME = "SPMD Python"
+KERNEL_NAME = "jupyter-distributed"
+DISPLAY_NAME = "Jupyter Distributed"
 
 
 def kernel_spec() -> dict[str, object]:
@@ -22,7 +22,7 @@ def kernel_spec() -> dict[str, object]:
         "argv": [
             sys.executable,
             "-m",
-            "spmd_jupyter.kernel",
+            "jupyter_distributed.kernel",
             "-f",
             "{connection_file}",
         ],
@@ -30,18 +30,18 @@ def kernel_spec() -> dict[str, object]:
         "language": "python",
         "metadata": {
             "debugger": True,
-            "spmd_jupyter": {"world_size": 1},
+            "jupyter_distributed": {"world_size": 1},
         },
     }
 
 
 def install_kernel_spec(*, user: bool = False, prefix: str | None = None) -> str:
-    """Install ``spmd-python`` and return its destination directory."""
+    """Install ``jupyter-distributed`` and return its destination directory."""
 
     if user and prefix:
         raise ValueError("user and prefix are mutually exclusive")
 
-    with tempfile.TemporaryDirectory(prefix="spmd-jupyter-kernelspec-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="jupyter-distributed-kernelspec-") as tmp:
         source = Path(tmp) / KERNEL_NAME
         source.mkdir()
         (source / "kernel.json").write_text(
@@ -58,7 +58,7 @@ def install_kernel_spec(*, user: bool = False, prefix: str | None = None) -> str
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Install the SPMD Python kernelspec")
+    parser = argparse.ArgumentParser(description="Install the Jupyter Distributed kernelspec")
     location = parser.add_mutually_exclusive_group()
     location.add_argument("--user", action="store_true", help="install for the current user")
     location.add_argument("--prefix", help="install under this environment prefix")

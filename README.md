@@ -1,6 +1,6 @@
-# SPMD Jupyter
+# Jupyter Distributed
 
-SPMD Jupyter makes one notebook behave like one persistent, multi-process Python
+Jupyter Distributed makes one notebook behave like one persistent, multi-process Python
 kernel. Select a process count, run an ordinary cell, and the same code executes
 concurrently on every rank. Each rank keeps its own Python state between cells,
 while JupyterLab presents the group as a single kernel with rank-aware output.
@@ -28,11 +28,11 @@ uv sync --extra distributed
 ```
 
 The wheel installs and enables the server extension and registers the
-`SPMD Python` (`spmd-python`) kernelspec. To repair or intentionally install the
+`Jupyter Distributed` (`jupyter-distributed`) kernelspec. To repair or intentionally install the
 kernelspec into another Jupyter environment:
 
 ```bash
-uv run spmd-jupyter-install-kernelspec --prefix .venv
+uv run jupyter-distributed-install-kernelspec --prefix .venv
 uv run jupyter kernelspec list
 ```
 
@@ -45,7 +45,7 @@ the desired build into the uv environment.
 ## Core workflow
 
 1. Start Lab with `uv run jupyter lab` and create a normal notebook using
-   **SPMD Python**.
+   **Jupyter Distributed**.
 2. Leave **Processes: 1** for normal single-process work, or choose 2, 4, 8, or
    a custom value. Changing it restarts the complete kernel group and clears
    in-memory state.
@@ -72,7 +72,7 @@ rank, world_size, rank_local_value
 For interactive collectives, prefer a deliberately long process-group timeout:
 
 ```python
-from spmd_jupyter import init_process_group
+from jupyter_distributed import init_process_group
 
 init_process_group("nccl", timeout="24h")
 ```
@@ -104,7 +104,7 @@ process groups. Rank processes receive the usual torchrun environment:
 
 The bundled server extension is the integration foundation for future
 session-owned lifecycle and exposes an authenticated health endpoint at
-`/spmd-jupyter/health` beneath the configured Jupyter base URL. In the current
+`/jupyter-distributed/health` beneath the configured Jupyter base URL. In the current
 MVP it does not own rank processes; the logical proxy kernel does.
 
 ## Development

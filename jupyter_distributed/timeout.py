@@ -1,4 +1,4 @@
-"""Interactive-friendly PyTorch process-group initialization."""
+"""Interactive-friendly PyTorch process-group initialization for Jupyter Distributed."""
 
 from __future__ import annotations
 

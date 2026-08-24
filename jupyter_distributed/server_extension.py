@@ -19,23 +19,23 @@ class HealthHandler(APIHandler):
         self.finish(
             {
                 "ok": True,
-                "extension": "spmd_jupyter",
+                "extension": "jupyter_distributed",
                 "version": __version__,
             }
         )
 
 
 def _jupyter_server_extension_points() -> list[dict[str, str]]:
-    return [{"module": "spmd_jupyter.server_extension"}]
+    return [{"module": "jupyter_distributed.server_extension"}]
 
 
 def _load_jupyter_server_extension(server_app: Any) -> None:
-    """Register HTTP routes and initialize the distributed session manager."""
+    """Register the server-side integration routes."""
 
     base_url = server_app.web_app.settings.get("base_url", "/")
-    route = url_path_join(base_url, "spmd-jupyter", "health")
+    route = url_path_join(base_url, "jupyter-distributed", "health")
     server_app.web_app.add_handlers(".*$", [(route, HealthHandler)])
-    server_app.log.info("SPMD Jupyter server extension loaded")
+    server_app.log.info("Jupyter Distributed server extension loaded")
 
 
 # Jupyter Server 1.x compatibility; current releases call the underscored hook.

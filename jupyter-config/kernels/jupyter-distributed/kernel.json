@@ -2,15 +2,15 @@
   "argv": [
     "python",
     "-m",
-    "spmd_jupyter.kernel",
+    "jupyter_distributed.kernel",
     "-f",
     "{connection_file}"
   ],
-  "display_name": "SPMD Python",
+  "display_name": "Jupyter Distributed",
   "language": "python",
   "metadata": {
     "debugger": true,
-    "spmd_jupyter": {
+    "jupyter_distributed": {
       "world_size": 1
     }
   }
