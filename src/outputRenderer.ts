@@ -1,4 +1,3 @@
-import { NotebookPanel } from '@jupyterlab/notebook';
 import { IRenderMimeRegistry, MimeModel } from '@jupyterlab/rendermime';
 import { IRenderMime } from '@jupyterlab/rendermime-interfaces';
 import { Signal } from '@lumino/signaling';
@@ -30,39 +29,37 @@ interface RankRecord {
   error: boolean;
 }
 
-/** Stores and broadcasts the selected output rank for each notebook panel. */
+/** Stores the selected rank independently for each logical cell execution. */
 export class RankSelectionModel {
-  readonly changed = new Signal<this, { panel: NotebookPanel; rank: number }>(
+  readonly changed = new Signal<this, { executionId: string; rank: number }>(
     this
   );
 
-  get(panel: NotebookPanel | null): number {
-    return panel ? (this._values.get(panel) ?? 0) : 0;
+  get(executionId: string | null): number {
+    return executionId ? (this._values.get(executionId) ?? 0) : 0;
   }
 
-  set(panel: NotebookPanel | null, rank: number): void {
-    if (!panel || this.get(panel) === rank) {
+  set(executionId: string | null, rank: number): void {
+    if (!executionId || this.get(executionId) === rank) {
       return;
     }
-    this._values.set(panel, rank);
-    this.changed.emit({ panel, rank });
+    this._values.set(executionId, rank);
+    this.changed.emit({ executionId, rank });
   }
 
-  private _values = new WeakMap<NotebookPanel, number>();
+  private _values = new Map<string, number>();
 }
 
 export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
   constructor(
     options: IRenderMime.IRendererOptions,
     rendermime: IRenderMimeRegistry,
-    panel: NotebookPanel | null,
     selections: RankSelectionModel
   ) {
     super();
     this.addClass('jp-JupyterDistributedRankOutput');
     this._mimeType = options.mimeType;
     this._rendermime = rendermime;
-    this._panel = panel;
     this._selections = selections;
     selections.changed.connect(this._onSelectionChanged, this);
     this._resizeObserver = new ResizeObserver(() => {
@@ -73,7 +70,8 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
 
   async renderModel(model: IRenderMime.IMimeModel): Promise<void> {
     this._clear();
-    const ranks = Private.normalizePayload(model.data[this._mimeType]);
+    const payload = model.data[this._mimeType];
+    const ranks = Private.normalizePayload(payload);
     if (ranks.length === 0) {
       this.addWidget(
         Private.textWidget(
@@ -85,7 +83,10 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
     }
 
     this._ranks = ranks.map(item => item.rank);
-    const remembered = this._selections.get(this._panel);
+    this._executionId = Private.executionId(payload);
+    const remembered = this._executionId
+      ? this._selections.get(this._executionId)
+      : this._selectedRank;
     this._selectedRank = this._ranks.includes(remembered)
       ? remembered
       : this._ranks[0];
@@ -114,7 +115,7 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
         button.title = `Rank ${rank.rank} produced an error`;
       }
       button.addEventListener('click', () => {
-        this._selections.set(this._panel, rank.rank);
+        this._selections.set(this._executionId, rank.rank);
         this._select(rank.rank);
       });
       tabs.node.appendChild(button);
@@ -238,9 +239,9 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
 
   private _onSelectionChanged(
     sender: RankSelectionModel,
-    change: { panel: NotebookPanel; rank: number }
+    change: { executionId: string; rank: number }
   ): void {
-    if (change.panel === this._panel) {
+    if (change.executionId === this._executionId) {
       this._select(change.rank);
     }
   }
@@ -250,7 +251,7 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
       return;
     }
     const rank = Number(this._rankSelect.value);
-    this._selections.set(this._panel, rank);
+    this._selections.set(this._executionId, rank);
     this._select(rank);
   };
 
@@ -262,8 +263,8 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
   }
 
   private _content = new Map<number, Panel>();
+  private _executionId: string | null = null;
   private _mimeType: string;
-  private _panel: NotebookPanel | null;
   private _rankSelect: HTMLSelectElement | null = null;
   private _ranks: number[] = [];
   private _rendermime: IRenderMimeRegistry;
@@ -274,6 +275,14 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
 }
 
 namespace Private {
+  export function executionId(value: unknown): string | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+    const executionId = (value as Record<string, unknown>).execution_id;
+    return typeof executionId === 'string' && executionId ? executionId : null;
+  }
+
   export function createRankPickerNode(): HTMLElement {
     const label = document.createElement('label');
     const text = document.createElement('span');

@@ -1,5 +1,4 @@
 import { JupyterFrontEnd, JupyterFrontEndPlugin } from '@jupyterlab/application';
-import { INotebookTracker } from '@jupyterlab/notebook';
 import { IRenderMimeRegistry } from '@jupyterlab/rendermime';
 import { IRenderMime } from '@jupyterlab/rendermime-interfaces';
 
@@ -14,10 +13,9 @@ const plugin: JupyterFrontEndPlugin<void> = {
   id: 'jupyter-distributed:plugin',
   description: 'Jupyter Distributed process controls and rank-aware output',
   autoStart: true,
-  requires: [INotebookTracker, IRenderMimeRegistry],
+  requires: [IRenderMimeRegistry],
   activate: (
     app: JupyterFrontEnd,
-    notebooks: INotebookTracker,
     rendermime: IRenderMimeRegistry
   ): void => {
     const rankSelections = new RankSelectionModel();
@@ -31,12 +29,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
       mimeTypes: [MIME_TYPE],
       safe: true,
       createRenderer: options =>
-        new RankOutputRenderer(
-          options,
-          rendermime,
-          notebooks.currentWidget,
-          rankSelections
-        )
+        new RankOutputRenderer(options, rendermime, rankSelections)
     };
     rendermime.addFactory(rendererFactory, 0);
   }

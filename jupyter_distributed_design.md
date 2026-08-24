@@ -83,7 +83,8 @@ ready.
 Distributed output uses
 `application/vnd.jupyter-distributed.rank+json`. Ranks are shown as tabs while
 there is sufficient width and as a dropdown when the tabs would become too
-narrow. Rank selection is synchronized across outputs in the same notebook.
+narrow. Each cell's rank selection is independent and remains stable while its
+live output is updated.
 
 ### Jupyter Server extension
 
