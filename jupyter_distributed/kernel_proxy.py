@@ -14,6 +14,7 @@ from uuid import uuid4
 from ipykernel.kernelapp import IPKernelApp
 from ipykernel.kernelbase import Kernel
 
+from .debugger import DistributedDebugger
 from .kernel_group import DistributedKernelGroup
 from .protocol import GroupExecution, RankOutput
 
@@ -153,10 +154,12 @@ class SPMDKernel(Kernel):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        self._debugger = DistributedDebugger(self)
         self.group = DistributedKernelGroup(
             int(os.environ.get("JUPYTER_DISTRIBUTED_WORLD_SIZE", "1")),
             kernel_name=os.environ.get("JUPYTER_DISTRIBUTED_BASE_KERNEL", "python3"),
             cwd=os.environ.get("JUPYTER_DISTRIBUTED_CWD") or None,
+            on_debug_event=self._debugger.handle_event,
         )
         self._execution_loop: asyncio.AbstractEventLoop | None = None
 
@@ -241,26 +244,19 @@ class SPMDKernel(Kernel):
         await self._ensure_started()
         content = dict(await self.group.kernel_info())
         content.setdefault("status", "ok")
-        content["debugger"] = False
+        supported_features = content.get("supported_features", ())
+        debugger = bool(content.get("debugger", False)) or (
+            isinstance(supported_features, (list, tuple)) and "debugger" in supported_features
+        )
+        self._debugger.set_available(debugger)
+        content["debugger"] = debugger
         self.session.send(stream, "kernel_info_reply", content, parent, ident)
 
     async def do_debug_request(self, msg: Mapping[str, Any]) -> dict[str, Any]:
-        """Reject debugger requests without raising in the control handler.
+        """Route one Jupyter Debug Adapter Protocol request across the ranks."""
 
-        JupyterLab may probe debugger capabilities immediately after a restart
-        based on the selected base kernelspec, before it has processed this
-        proxy's ``kernel_info_reply``.  The base implementation raises
-        ``NotImplementedError``, which produces a noisy server log traceback.
-        Return a valid Debug Adapter Protocol error response instead.
-        """
-
-        return {
-            "type": "response",
-            "request_seq": msg.get("seq", 0),
-            "success": False,
-            "command": str(msg.get("command", "")),
-            "message": "Debugging is not supported for distributed processes.",
-        }
+        await self._ensure_started()
+        return await self._debugger.request(msg)
 
     async def do_shutdown(self, restart: bool) -> dict[str, Any]:
         await self.group.shutdown(now=True)

@@ -89,6 +89,29 @@ async def execute_through_proxy(
     return reply["content"], data
 
 
+async def debug_through_proxy(
+    client: AsyncKernelClient,
+    sequence: int,
+    command: str,
+    arguments: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    request = client.session.msg(
+        "debug_request",
+        content={
+            "seq": sequence,
+            "type": "request",
+            "command": command,
+            "arguments": arguments or {},
+        },
+    )
+    message_id = request["header"]["msg_id"]
+    client.control_channel.send(request)
+    while True:
+        reply = await client.get_control_msg(timeout=30)
+        if reply.get("parent_header", {}).get("msg_id") == message_id:
+            return reply["content"]
+
+
 @pytest.mark.asyncio
 async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle() -> None:
     manager = AsyncKernelManager(kernel_name="python3")
@@ -126,27 +149,145 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle()
             if info_reply.get("parent_header", {}).get("msg_id") == info_id:
                 break
         assert info_reply["content"]["implementation"] == "ipython"
-        assert info_reply["content"]["debugger"] is False
+        assert info_reply["content"]["debugger"] is True
 
-        debug_request = client.session.msg(
-            "debug_request",
-            content={
-                "seq": 1,
-                "type": "request",
-                "command": "debugInfo",
-                "arguments": {},
+        initialized = await debug_through_proxy(
+            client,
+            1,
+            "initialize",
+            {
+                "clientID": "jupyter-distributed-test",
+                "clientName": "jupyter-distributed-test",
+                "adapterID": "python",
+                "pathFormat": "path",
+                "linesStartAt1": True,
+                "columnsStartAt1": True,
+                "supportsVariableType": True,
+                "supportsVariablePaging": True,
             },
         )
-        client.control_channel.send(debug_request)
-        debug_reply = await client.get_control_msg(timeout=5)
-        assert debug_reply["msg_type"] == "debug_reply"
-        assert debug_reply["content"] == {
-            "type": "response",
-            "request_seq": 1,
-            "success": False,
-            "command": "debugInfo",
-            "message": "Debugging is not supported for distributed processes.",
-        }
+        assert initialized["success"] is True
+        assert (await debug_through_proxy(client, 2, "attach"))["success"] is True
+
+        debug_code = (
+            "import os\ndebug_value = int(os.environ['RANK'])\ndebug_value += 10\ndebug_value"
+        )
+        dumped = await debug_through_proxy(client, 3, "dumpCell", {"code": debug_code})
+        source_path = dumped["body"]["sourcePath"]
+        breakpoints = await debug_through_proxy(
+            client,
+            4,
+            "setBreakpoints",
+            {
+                "source": {"path": source_path},
+                "breakpoints": [{"line": 3}],
+                "sourceModified": False,
+            },
+        )
+        assert breakpoints["success"] is True
+        assert breakpoints["body"]["breakpoints"][0]["verified"] is True
+
+        debug_execution_id = client.execute(debug_code)
+        stopped_threads: list[int] = []
+        while len(stopped_threads) < 2:
+            message = await client.get_iopub_msg(timeout=30)
+            if (
+                message["msg_type"] == "debug_event"
+                and message["content"].get("event") == "stopped"
+            ):
+                stopped_threads.append(message["content"]["body"]["threadId"])
+
+        rank_values: set[str] = set()
+        for sequence, thread_id in enumerate(stopped_threads, start=5):
+            stack = await debug_through_proxy(
+                client,
+                sequence,
+                "stackTrace",
+                {"threadId": thread_id, "startFrame": 0, "levels": 20},
+            )
+            frames = stack["body"]["stackFrames"]
+            assert frames
+            assert frames[0]["source"]["path"] == source_path
+            assert frames[0]["name"].startswith("Rank ")
+            scopes = await debug_through_proxy(
+                client,
+                sequence + 10,
+                "scopes",
+                {"frameId": frames[0]["id"]},
+            )
+            variables = await debug_through_proxy(
+                client,
+                sequence + 20,
+                "variables",
+                {"variablesReference": scopes["body"]["scopes"][0]["variablesReference"]},
+            )
+            rank_values.update(
+                variable["value"]
+                for variable in variables["body"]["variables"]
+                if variable["name"] == "debug_value"
+            )
+        assert rank_values == {"0", "1"}
+
+        stepped = await debug_through_proxy(
+            client,
+            39,
+            "next",
+            {"threadId": stopped_threads[0]},
+        )
+        assert stepped["success"] is True
+        stepped_threads: list[int] = []
+        while len(stepped_threads) < 2:
+            message = await client.get_iopub_msg(timeout=30)
+            if (
+                message["msg_type"] == "debug_event"
+                and message["content"].get("event") == "stopped"
+            ):
+                stepped_threads.append(message["content"]["body"]["threadId"])
+        for sequence, thread_id in enumerate(stepped_threads, start=30):
+            stack = await debug_through_proxy(
+                client,
+                sequence,
+                "stackTrace",
+                {"threadId": thread_id, "startFrame": 0, "levels": 1},
+            )
+            assert stack["body"]["stackFrames"][0]["line"] == 4
+
+        continued = await debug_through_proxy(
+            client,
+            40,
+            "continue",
+            {"threadId": stepped_threads[0]},
+        )
+        assert continued["success"] is True
+        assert continued["body"]["allThreadsContinued"] is True
+
+        debug_data = None
+        while True:
+            message = await client.get_iopub_msg(timeout=30)
+            if message.get("parent_header", {}).get("msg_id") != debug_execution_id:
+                continue
+            if message["msg_type"] in {"display_data", "update_display_data"}:
+                debug_data = message["content"]["data"]
+            if message["msg_type"] == "status" and message["content"]["execution_state"] == "idle":
+                break
+        while True:
+            debug_execution_reply = await client.get_shell_msg(timeout=5)
+            if debug_execution_reply.get("parent_header", {}).get("msg_id") == debug_execution_id:
+                break
+        assert debug_execution_reply["content"]["status"] == "ok"
+        assert debug_data is not None
+        assert [
+            rank["outputs"][-1]["content"]["data"]["text/plain"]
+            for rank in debug_data[RANK_MIME]["ranks"]
+        ] == ["10", "11"]
+        assert (
+            await debug_through_proxy(
+                client,
+                41,
+                "disconnect",
+                {"restart": False, "terminateDebuggee": False},
+            )
+        )["success"] is True
 
         live_id = client.execute(
             "import time\n"

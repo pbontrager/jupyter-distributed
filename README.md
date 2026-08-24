@@ -39,6 +39,18 @@ Outputs stream while a cell is running. Standard streams, rich display data,
 display updates, output clearing, exceptions, and terminal-style progress
 updates are kept separate for each rank.
 
+### Debugging Python
+
+The standard JupyterLab debugger works with distributed IPython kernels. A
+notebook breakpoint is installed in every process. Continue, pause, step over,
+step in, and step out apply to all paused processes together, while stack frames
+and variables are inspected for the selected rank thread.
+
+This is the first-stage debugging interface: ranks appear as threads in
+JupyterLab's existing debugger panel rather than in dedicated rank tabs. Python's
+built-in `breakpoint()` remains disabled in distributed mode; use JupyterLab's
+gutter breakpoints instead.
+
 ## Computation model
 
 Jupyter Distributed follows the single program, multiple data (SPMD) model:
@@ -75,8 +87,8 @@ rank-aware output. It does not:
 - initialize collectives, shard data or models, or assign devices;
 - schedule work across multiple machines, clusters, Slurm, or Kubernetes;
 - provide elastic process resizing;
-- support stdin, interactive debugging, or comm-based widgets such as
-  `ipywidgets` and `tqdm.notebook` in distributed mode.
+- support stdin or comm-based widgets such as `ipywidgets` and `tqdm.notebook`
+  in distributed mode.
 
 The selected runtime remains responsible for communication between processes.
 The execution protocol is designed to support any kernelspec, but the current

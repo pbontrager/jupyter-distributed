@@ -11,10 +11,11 @@ class DistributedBreakpointError(RuntimeError):
 
 
 def distributed_breakpoint(*args: object, **kwargs: object) -> NoReturn:
-    """Refuse an uncoordinated multi-rank debugger session.
+    """Refuse an uncoordinated multi-rank ``pdb`` session.
 
-    A later control-plane debugger can replace this hook.  Failing explicitly is
-    safer than allowing several pdb instances to race for the same stdin stream.
+    Notebook gutter breakpoints use the coordinated Jupyter debug protocol.
+    Python's built-in hook would instead start several ``pdb`` sessions that
+    race for the same stdin stream, so it continues to fail explicitly.
     """
 
     rank = os.environ.get("RANK", "?")

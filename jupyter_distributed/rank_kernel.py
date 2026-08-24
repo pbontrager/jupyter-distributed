@@ -14,6 +14,7 @@ from .protocol import RankExecution, RankOutput
 
 _OUTPUT_TYPES = {"stream", "display_data", "execute_result", "error"}
 OutputCallback = Callable[[int, tuple[RankOutput, ...]], Awaitable[None] | None]
+DebugEventCallback = Callable[[int, Mapping[str, Any]], Awaitable[None] | None]
 
 
 class RankKernel:
@@ -27,13 +28,17 @@ class RankKernel:
         kernel_name: str = "python3",
         cwd: str | None = None,
         ready_timeout: float = 30.0,
+        on_debug_event: DebugEventCallback | None = None,
     ) -> None:
         self.rank = rank
         self.env = dict(env)
         self.cwd = cwd
         self.ready_timeout = ready_timeout
+        self.on_debug_event = on_debug_event
         self.manager = AsyncKernelManager(kernel_name=kernel_name)
         self.client: AsyncKernelClient | None = None
+        self._iopub_queues: dict[str, asyncio.Queue[Mapping[str, Any]]] = {}
+        self._iopub_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         await self.manager.start_kernel(env=self.env, cwd=self.cwd)
@@ -42,6 +47,7 @@ class RankKernel:
         client.start_channels()
         try:
             await client.wait_for_ready(timeout=self.ready_timeout)
+            self._iopub_task = asyncio.create_task(self._route_iopub())
             await self._install_breakpoint_hook()
         except BaseException:
             await self.shutdown(now=True)
@@ -79,13 +85,13 @@ class RankKernel:
             allow_stdin=False,
             stop_on_error=False,
         )
+        iopub_queue: asyncio.Queue[Mapping[str, Any]] = asyncio.Queue()
+        self._iopub_queues[message_id] = iopub_queue
         reply_task = asyncio.create_task(self._shell_reply(message_id))
         output_buffer = _RankOutputBuffer(self.rank)
         try:
             while True:
-                message = await client.get_iopub_msg(timeout=None)
-                if message.get("parent_header", {}).get("msg_id") != message_id:
-                    continue
+                message = await iopub_queue.get()
                 message_type = message.get("msg_type")
                 if (
                     output_buffer.handle(str(message_type), message.get("content", {}))
@@ -104,6 +110,8 @@ class RankKernel:
             reply_task.cancel()
             await asyncio.gather(reply_task, return_exceptions=True)
             raise
+        finally:
+            self._iopub_queues.pop(message_id, None)
         status = reply.get("content", {}).get("status", "error")
         if status not in {"ok", "error", "aborted"}:
             status = "error"
@@ -123,6 +131,18 @@ class RankKernel:
         reply = await self._shell_reply(message_id)
         return reply.get("content", {})
 
+    async def debug_request(self, content: Mapping[str, Any]) -> Mapping[str, Any]:
+        """Send one Jupyter debug request over the child control channel."""
+
+        client = self._client()
+        request = client.session.msg("debug_request", content=dict(content))
+        message_id = str(request["header"]["msg_id"])
+        client.control_channel.send(request)
+        while True:
+            reply = await client.get_control_msg(timeout=None)
+            if reply.get("parent_header", {}).get("msg_id") == message_id:
+                return reply.get("content", {})
+
     async def _shell_reply(self, message_id: str) -> Mapping[str, Any]:
         client = self._client()
         while True:
@@ -136,6 +156,10 @@ class RankKernel:
 
     async def shutdown(self, *, now: bool = False) -> None:
         client, self.client = self.client, None
+        iopub_task, self._iopub_task = self._iopub_task, None
+        if iopub_task is not None:
+            iopub_task.cancel()
+            await asyncio.gather(iopub_task, return_exceptions=True)
         try:
             if self.manager.has_kernel:
                 await self.manager.shutdown_kernel(now=now)
@@ -150,6 +174,21 @@ class RankKernel:
         if self.client is None:
             raise RuntimeError(f"rank {self.rank} is not running")
         return self.client
+
+    async def _route_iopub(self) -> None:
+        client = self._client()
+        while True:
+            message = await client.get_iopub_msg(timeout=None)
+            if message.get("msg_type") == "debug_event":
+                if self.on_debug_event is not None:
+                    notified = self.on_debug_event(self.rank, message.get("content", {}))
+                    if inspect.isawaitable(notified):
+                        await notified
+                continue
+            message_id = message.get("parent_header", {}).get("msg_id")
+            queue = self._iopub_queues.get(str(message_id))
+            if queue is not None:
+                queue.put_nowait(message)
 
 
 class _RankOutputBuffer:

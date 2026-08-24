@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from typing import Any, Literal, Self
 
 from .protocol import GroupExecution, GroupStatus
-from .rank_kernel import OutputCallback, RankKernel
+from .rank_kernel import DebugEventCallback, OutputCallback, RankKernel
 
 
 def _free_port(host: str) -> int:
@@ -31,6 +31,7 @@ class DistributedKernelGroup:
         master_port: int | None = None,
         env: Mapping[str, str] | None = None,
         cwd: str | None = None,
+        on_debug_event: DebugEventCallback | None = None,
     ) -> None:
         if world_size < 1:
             raise ValueError("world_size must be at least 1")
@@ -40,6 +41,7 @@ class DistributedKernelGroup:
         self.master_port = master_port
         self.base_env = {**os.environ, **(env or {})}
         self.cwd = cwd
+        self.on_debug_event = on_debug_event
         self._ranks: list[RankKernel] = []
         self._state: Literal["stopped", "starting", "idle", "busy", "restarting"] = "stopped"
         self._execution_count = 0
@@ -65,6 +67,7 @@ class DistributedKernelGroup:
                 self._rank_env(rank, port),
                 kernel_name=self.kernel_name,
                 cwd=self.cwd,
+                on_debug_event=self.on_debug_event,
             )
             for rank in range(self.world_size)
         ]
@@ -126,6 +129,19 @@ class DistributedKernelGroup:
     async def is_complete(self, code: str) -> Mapping[str, Any]:
         self._require_started()
         return await self._ranks[0].request("is_complete", code)
+
+    async def debug(
+        self, requests: Mapping[int, Mapping[str, Any]]
+    ) -> dict[int, Mapping[str, Any]]:
+        """Send rank-specific debugger requests concurrently."""
+
+        self._require_started()
+        ranks = {rank.rank: rank for rank in self._ranks}
+        requested = [(rank, content) for rank, content in requests.items() if rank in ranks]
+        replies = await asyncio.gather(
+            *(ranks[rank].debug_request(content) for rank, content in requested)
+        )
+        return {rank: reply for (rank, _content), reply in zip(requested, replies, strict=True)}
 
     async def interrupt(self) -> None:
         await asyncio.gather(*(rank.interrupt() for rank in self._ranks), return_exceptions=True)
