@@ -30,7 +30,7 @@ def kernel_spec() -> dict[str, object]:
         "language": "python",
         "interrupt_mode": "message",
         "metadata": {
-            "debugger": True,
+            "debugger": False,
             "jupyter_distributed": {"world_size": 1},
         },
     }

@@ -114,6 +114,12 @@ run checks with uv-managed commands:
 
 ```bash
 uv sync --group dev --extra distributed
+uv run nbstripout --install --attributes .gitattributes
+git config filter.nbstripout.clean \
+  "\"$PWD/.venv/bin/python3\" -m nbstripout --keep-id"
+git config diff.ipynb.textconv \
+  "\"$PWD/.venv/bin/python3\" -m nbstripout -t --keep-id"
+git config filter.nbstripout.extrakeys metadata.language_info
 uv run --with nodeenv python -m nodeenv --node=20.19.0 .nodeenv
 PATH="$PWD/.nodeenv/bin:$PATH" uv run jlpm install
 PATH="$PWD/.nodeenv/bin:$PATH" uv run jlpm build
