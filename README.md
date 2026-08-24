@@ -1,29 +1,23 @@
 # Jupyter Distributed
 
-Jupyter Distributed runs each notebook cell across multiple persistent kernel
-processes and groups their outputs by rank. It adds a **Processes** control to
+Jupyter Distributed is a notebook extension for running each cell concurrently
+across multiple persistent kernel processes. It adds a **Processes** option to
 JupyterLab while letting you continue to select and customize your normal
 Jupyter kernels.
 
-The project is intended for interactive single-machine SPMD development:
-distributed training experiments, collective communication, tensor/model
-parallelism, and any workflow where every process should execute the same
-notebook code while retaining independent state between cells.
+This follows the single program, multiple data (SPMD) model: every process runs
+the same code but maintains its own independent state. In a notebook, that means
+one cell can update several parallel interactive sessions whose variables remain
+available in later cells. The model is general, while naturally supporting
+distributed training patterns found in ecosystems such as PyTorch and JAX.
 
 ## Installation
 
 Install Jupyter Distributed into the same environment as JupyterLab:
 
 ```bash
-python -m pip install jupyter-distributed
+pip install jupyter-distributed
 jupyter lab
-```
-
-With uv:
-
-```bash
-uv add jupyter-distributed
-uv run jupyter lab
 ```
 
 The Jupyter Server and JupyterLab extensions are enabled automatically. Restart
@@ -32,16 +26,14 @@ JupyterLab after installing or upgrading the package.
 ## Using it
 
 1. Open or create a notebook and select its normal kernel, such as **Python 3**.
-2. Enter a positive integer in the **Processes** field in the notebook toolbar.
+2. Enter the number of parallel processes in the **Processes** field in the
+   notebook toolbar.
 3. Confirm the restart. Every subsequent cell is executed concurrently by that
    many persistent processes.
-4. Select a rank tab to inspect its output. When there are too many tabs for the
-   available width, the rank control becomes a dropdown.
+4. Select a rank tab to inspect its output.
 
-Changing the process count restarts the complete group and clears in-memory
-state. Non-default counts are stored in optional notebook metadata and restored
-when the notebook is reopened. Jupyter installations without this extension
-ignore that metadata normally.
+Changing the process count stops the current kernel processes, starts a new
+group at the requested size, and clears all in-memory state.
 
 Outputs stream while a cell is running. Standard streams, rich display data,
 display updates, output clearing, exceptions, and terminal-style progress
@@ -66,11 +58,13 @@ import random
 
 rank = int(os.environ["RANK"])
 value = random.randint(0, 9)
-{"rank": rank, "value": value}
+rank * 10 + value
 ```
 
 The output contains two rank views with independently generated values. Both
 `rank` and `value` remain available in later cells on their respective process.
+
+For complete distributed-model examples, see the [demo notebooks](#demos).
 
 ## What it does not do
 
@@ -78,27 +72,21 @@ Jupyter Distributed provides local process lifecycle, SPMD cell execution, and
 rank-aware output. It does not:
 
 - choose or configure a distributed-computing framework;
-- initialize collectives, shard models, or assign devices;
+- initialize collectives, shard data or models, or assign devices;
 - schedule work across multiple machines, clusters, Slurm, or Kubernetes;
 - provide elastic process resizing;
 - support stdin, interactive debugging, or comm-based widgets such as
   `ipywidgets` and `tqdm.notebook` in distributed mode.
 
 The selected runtime remains responsible for communication between processes.
-The generic execution path is not limited to Python, although runtime-specific
-distributed setup remains the user's responsibility.
+The execution protocol is designed to support any kernelspec, but the current
+implementation has only been tested with Python kernels.
 
 ## PyTorch Distributed
 
-The package does not require PyTorch. Install the PyTorch build appropriate for
-your machine and CUDA environment as part of your existing project. For a basic
-default installation, an optional extra is available:
-
-```bash
-python -m pip install "jupyter-distributed[distributed]"
-```
-
-Each process receives torchrun-compatible environment variables:
+Jupyter Distributed is not specific to PyTorch, but it was built with
+`torch.distributed` as a flagship use case. To make that workflow convenient,
+each process receives torchrun-compatible environment variables:
 
 - `RANK`
 - `LOCAL_RANK`
@@ -108,21 +96,30 @@ Each process receives torchrun-compatible environment variables:
 - `MASTER_PORT`
 
 Jupyter Distributed selects a local rendezvous address and available port, but
-does not initialize a process group. A notebook can do that explicitly:
+does not initialize a process group. A notebook uses the ordinary PyTorch API:
 
 ```python
 import torch.distributed as dist
-from jupyter_distributed import init_process_group
 
 if not dist.is_initialized():
-    init_process_group("gloo", timeout="24h")
+    dist.init_process_group("gloo")
 
 dist.get_rank(), dist.get_world_size()
 ```
 
 For NCCL, select the appropriate CUDA device from `LOCAL_RANK` before
-initializing the process group. Environment variables may also be changed in an
-earlier cell before the distributed framework reads them.
+initializing the process group. The defaults may be overridden in an earlier
+cell before `init_process_group()` reads them:
+
+```python
+import os
+
+os.environ["MASTER_PORT"] = "29501"
+```
+
+PyTorch's process-group timeout applies to outstanding collective operations,
+not idle time between notebook cells, so normal interactive pauses do not
+require a longer timeout.
 
 ## Demos
 
@@ -135,4 +132,4 @@ features implemented by Jupyter Distributed itself.
 
 ## License
 
-MIT
+Licensed under the [MIT License](LICENSE).

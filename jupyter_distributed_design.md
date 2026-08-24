@@ -167,14 +167,14 @@ when the frontend extension is unavailable.
 ## PyTorch Distributed boundary
 
 PyTorch is optional. The extension provides torchrun-compatible environment
-variables and an optional `init_process_group` helper with an
-interactive-friendly timeout, but the notebook must initialize and manage its
-own process groups.
+variables, but the notebook must initialize and manage its own process groups
+through the standard PyTorch API.
 
 There is deliberately no implicit `torch.distributed.barrier()` after a cell.
 Cell completion is coordinated over Jupyter's control path, independently of
 the user's process group. Long pauses between cells therefore do not represent
-an outstanding collective.
+an outstanding collective and do not require extending PyTorch's process-group
+timeout.
 
 ## Current limitations
 

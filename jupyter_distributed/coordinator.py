@@ -102,9 +102,7 @@ class DistributedKernelCoordinator:
         )
 
     @staticmethod
-    def _configure_proxy(
-        kernel: Any, state: DistributedKernelState, world_size: int
-    ) -> None:
+    def _configure_proxy(kernel: Any, state: DistributedKernelState, world_size: int) -> None:
         kernel.kernel_spec.argv = [
             sys.executable,
             "-m",

@@ -988,11 +988,6 @@ dependencies = [
     { name = "jupyterlab" },
 ]
 
-[package.optional-dependencies]
-distributed = [
-    { name = "torch" },
-]
-
 [package.dev-dependencies]
 dev = [
     { name = "build" },
@@ -1000,6 +995,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
+    { name = "torch" },
 ]
 
 [package.metadata]
@@ -1008,9 +1004,7 @@ requires-dist = [
     { name = "jupyter-client", specifier = ">=8.6" },
     { name = "jupyter-server", specifier = ">=2.14" },
     { name = "jupyterlab", specifier = ">=4.2" },
-    { name = "torch", marker = "extra == 'distributed'", specifier = ">=2.4" },
 ]
-provides-extras = ["distributed"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1019,6 +1013,7 @@ dev = [
     { name = "pytest", specifier = ">=8.2" },
     { name = "pytest-asyncio", specifier = ">=0.23" },
     { name = "ruff", specifier = ">=0.6" },
+    { name = "torch", specifier = ">=2.4" },
 ]
 
 [[package]]
