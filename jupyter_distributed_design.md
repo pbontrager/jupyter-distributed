@@ -283,6 +283,12 @@ dropdown while preserving the selected rank.
 
 The selected tab displays that rank's stdout/stderr/rich outputs/exceptions.
 
+Create the rank-aware output at execution start and update it as rank IOPub
+messages arrive. Coalesce rapid updates, preserve terminal carriage-return and
+backspace behavior, and apply `display_data`, `update_display_data`, and
+`clear_output` semantics independently for every rank. Do not wait for all
+ranks to finish before showing prints, logs, or progress.
+
 Useful behavior:
 
 - remember the last selected rank at notebook level;

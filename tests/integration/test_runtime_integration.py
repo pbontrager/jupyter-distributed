@@ -81,7 +81,7 @@ async def execute_through_proxy(
         message = await client.get_iopub_msg(timeout=20)
         if message.get("parent_header", {}).get("msg_id") != message_id:
             continue
-        if message["msg_type"] == "display_data":
+        if message["msg_type"] in {"display_data", "update_display_data"}:
             data = message["content"]["data"]
         if message["msg_type"] == "status" and message["content"]["execution_state"] == "idle":
             break
@@ -90,8 +90,7 @@ async def execute_through_proxy(
 
 
 @pytest.mark.asyncio
-async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
-) -> None:
+async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle() -> None:
     manager = AsyncKernelManager(kernel_name="python3")
     await manager.start_kernel(cwd=str(Path.cwd()))
 
@@ -149,10 +148,31 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
             "message": "Debugging is not supported for distributed processes.",
         }
 
+        live_id = client.execute(
+            "import time\n"
+            "print('started', flush=True)\n"
+            "time.sleep(0.5)\n"
+            "print('finished', flush=True)"
+        )
+        saw_live_output = False
+        while True:
+            message = await client.get_iopub_msg(timeout=10)
+            if message.get("parent_header", {}).get("msg_id") != live_id:
+                continue
+            if message["msg_type"] == "update_display_data":
+                payload = message["content"]["data"].get(RANK_MIME)
+                if payload and payload["status"] == "busy":
+                    text = str(payload["ranks"][0]["outputs"])
+                    saw_live_output = saw_live_output or "started" in text
+            if message["msg_type"] == "status" and message["content"]["execution_state"] == "idle":
+                break
+        live_reply = await client.get_shell_msg(timeout=5)
+        assert live_reply["content"]["status"] == "ok"
+        assert saw_live_output
+
         reply, data = await execute_through_proxy(
             client,
-            "import os; saved = int(os.environ['RANK']); "
-            "(saved, int(os.environ['WORLD_SIZE']))",
+            "import os; saved = int(os.environ['RANK']); (saved, int(os.environ['WORLD_SIZE']))",
         )
         assert reply["status"] == "ok"
         assert data is not None
@@ -183,7 +203,7 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
             message = await client.get_iopub_msg(timeout=10)
             if message.get("parent_header", {}).get("msg_id") != message_id:
                 continue
-            if message["msg_type"] == "display_data":
+            if message["msg_type"] in {"display_data", "update_display_data"}:
                 interrupted_data = message["content"]["data"]
             if message["msg_type"] == "status" and message["content"]["execution_state"] == "idle":
                 break

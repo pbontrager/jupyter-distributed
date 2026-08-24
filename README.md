@@ -52,7 +52,9 @@ the desired build into the uv environment.
    source concurrently.
 4. Use the output tabs to inspect stdout, rich results, and exceptions from
    each rank. When the tabs no longer fit, the same control automatically
-   becomes a rank dropdown. The notebook retains one logical execution count.
+   becomes a rank dropdown. Prints, logs, progress bars, display updates, and
+   output clears are reflected while the cell is still running. The notebook
+   retains one logical execution count.
 5. Interrupt, restart, and shut down with the standard Jupyter commands; those
    actions apply to the whole group.
 
@@ -99,10 +101,11 @@ At process count 1, Jupyter launches the selected kernel normally. At larger
 process counts, the server restarts the same logical kernel ID through an
 internal proxy and launches N copies of the selected kernelspec. The original
 kernel name remains visible in the notebook UI. The proxy fans each execution
-request out and waits for all ranks to finish, error, or be interrupted before
-reporting logical idle. This notebook-level coordination does not inject a
-`torch.distributed.barrier()` and remains separate from the user's NCCL/Gloo
-process groups. Rank processes receive the usual torchrun environment:
+request out, streams rank output into one updating display, and waits for all
+ranks to finish, error, or be interrupted before reporting logical idle. This
+notebook-level coordination does not inject a `torch.distributed.barrier()` and
+remains separate from the user's NCCL/Gloo process groups. Rank processes
+receive the usual torchrun environment:
 `RANK`, `LOCAL_RANK`, `WORLD_SIZE`, `LOCAL_WORLD_SIZE`, `MASTER_ADDR`, and
 `MASTER_PORT`.
 
@@ -166,8 +169,9 @@ long-lived environment.
   not a primary workflow.
 - The generic fanout path works with any kernelspec, but language-specific
   multi-process communication remains the user's responsibility.
-- Comm-based widgets and interactive debuggers are not yet forwarded through
-  the distributed proxy.
+- Comm-based widgets and interactive debuggers are not forwarded through the
+  distributed proxy. Stream output and display updates are supported, but
+  bidirectional widget state is outside the SPMD execution model.
 - Regular `input()` is not supported by the MVP rank workers; executions reject
   stdin instead of allowing multiple ranks to compete for the notebook channel.
 - An ordinary Python error is reported per rank without intentionally killing

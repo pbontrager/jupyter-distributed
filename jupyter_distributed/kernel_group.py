@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from typing import Any, Literal, Self
 
 from .protocol import GroupExecution, GroupStatus
-from .rank_kernel import RankKernel
+from .rank_kernel import OutputCallback, RankKernel
 
 
 def _free_port(host: str) -> int:
@@ -87,6 +87,7 @@ class DistributedKernelGroup:
         silent: bool = False,
         store_history: bool = True,
         user_expressions: Mapping[str, Any] | None = None,
+        on_output: OutputCallback | None = None,
     ) -> GroupExecution:
         async with self._execution_lock:
             self._require_started()
@@ -101,6 +102,7 @@ class DistributedKernelGroup:
                             silent=silent,
                             store_history=store_history,
                             user_expressions=user_expressions,
+                            on_output=on_output,
                         )
                         for rank in self._ranks
                     )

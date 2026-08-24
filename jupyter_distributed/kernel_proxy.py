@@ -9,14 +9,16 @@ import signal
 import traceback
 from collections.abc import Mapping
 from typing import Any, ClassVar
+from uuid import uuid4
 
 from ipykernel.kernelapp import IPKernelApp
 from ipykernel.kernelbase import Kernel
 
 from .kernel_group import DistributedKernelGroup
-from .protocol import GroupExecution
+from .protocol import GroupExecution, RankOutput
 
 RANK_MIME = "application/vnd.jupyter-distributed.rank+json"
+_STREAM_UPDATE_INTERVAL = 0.05
 
 
 def render_plain(execution: GroupExecution) -> str:
@@ -39,6 +41,97 @@ def render_html(execution: GroupExecution) -> str:
         )
     sections.append("</div>")
     return "".join(sections)
+
+
+class _LiveRankDisplay:
+    """Coalesce rank output events into one updating notebook display."""
+
+    def __init__(self, kernel: SPMDKernel, execution_count: int) -> None:
+        self._kernel = kernel
+        self._execution_count = execution_count
+        self._execution_id = uuid4().hex
+        self._display_id = f"jupyter-distributed-{self._execution_id}"
+        self._outputs: dict[int, tuple[RankOutput, ...]] = {
+            rank: () for rank in range(kernel.group.world_size)
+        }
+        self._flush_task: asyncio.Task[None] | None = None
+        self._last_sent = 0.0
+        self._dirty = False
+
+    def start(self) -> None:
+        self._send("display_data", self._live_payload())
+
+    def update(self, rank: int, outputs: tuple[RankOutput, ...]) -> None:
+        self._outputs[rank] = outputs
+        self._dirty = True
+        if self._flush_task is not None:
+            return
+        loop = asyncio.get_running_loop()
+        delay = max(0.0, _STREAM_UPDATE_INTERVAL - (loop.time() - self._last_sent))
+        self._flush_task = loop.create_task(self._flush_after(delay))
+
+    async def finish(self, execution: GroupExecution) -> None:
+        if self._flush_task is not None:
+            self._flush_task.cancel()
+            await asyncio.gather(self._flush_task, return_exceptions=True)
+            self._flush_task = None
+        payload = execution.as_dict()
+        payload["execution_id"] = self._execution_id
+        self._send("update_display_data", payload, execution=execution)
+
+    async def _flush_after(self, delay: float) -> None:
+        if delay:
+            await asyncio.sleep(delay)
+        self._flush_task = None
+        if self._dirty:
+            self._send("update_display_data", self._live_payload())
+
+    def _live_payload(self) -> dict[str, Any]:
+        return {
+            "execution_id": self._execution_id,
+            "execution_count": self._execution_count,
+            "status": "busy",
+            "world_size": len(self._outputs),
+            "ranks": [
+                {
+                    "rank": rank,
+                    "status": "running",
+                    "outputs": [output.as_dict() for output in outputs],
+                }
+                for rank, outputs in sorted(self._outputs.items())
+            ],
+        }
+
+    def _send(
+        self,
+        message_type: str,
+        payload: dict[str, Any],
+        *,
+        execution: GroupExecution | None = None,
+    ) -> None:
+        if execution is None:
+            plain = "\n\n".join(
+                f"[Rank {rank} — running]\n" + "".join(output.plain_text() for output in outputs)
+                for rank, outputs in sorted(self._outputs.items())
+            ).rstrip()
+            data = {RANK_MIME: payload, "text/plain": plain}
+        else:
+            data = {
+                RANK_MIME: payload,
+                "text/html": render_html(execution),
+                "text/plain": render_plain(execution),
+            }
+        self._kernel.send_response(
+            self._kernel.iopub_socket,
+            message_type,
+            {
+                "data": data,
+                "metadata": {},
+                "transient": {"display_id": self._display_id},
+            },
+        )
+        self._last_sent = asyncio.get_running_loop().time()
+        self._dirty = False
 
 
 class SPMDKernel(Kernel):
@@ -92,31 +185,28 @@ class SPMDKernel(Kernel):
     ) -> dict[str, Any]:
         self._execution_loop = asyncio.get_running_loop()
         await self._ensure_started()
+        live_display = None
+        if not silent:
+            live_display = _LiveRankDisplay(
+                self,
+                self.group.execution_count + (1 if store_history else 0),
+            )
+            live_display.start()
         execution = await self.group.execute(
             code,
             silent=silent,
             store_history=store_history,
             user_expressions=user_expressions,
+            on_output=live_display.update if live_display is not None else None,
         )
-        if not silent:
-            data = {
-                RANK_MIME: execution.as_dict(),
-                "text/html": render_html(execution),
-                "text/plain": render_plain(execution),
-            }
-            self.send_response(
-                self.iopub_socket,
-                "display_data",
-                {"data": data, "metadata": {}},
-            )
+        if live_display is not None:
+            await live_display.finish(execution)
         if execution.status == "ok":
             return {
                 "status": "ok",
                 "execution_count": execution.execution_count,
                 "payload": [],
-                "user_expressions": dict(
-                    execution.ranks[0].reply.get("user_expressions", {})
-                ),
+                "user_expressions": dict(execution.ranks[0].reply.get("user_expressions", {})),
             }
         failed = next(result for result in execution.ranks if result.status != "ok")
         return self._error(
@@ -143,9 +233,7 @@ class SPMDKernel(Kernel):
         await self._ensure_started()
         return await self.group.is_complete(code)
 
-    async def kernel_info_request(
-        self, stream: Any, ident: Any, parent: Mapping[str, Any]
-    ) -> None:
+    async def kernel_info_request(self, stream: Any, ident: Any, parent: Mapping[str, Any]) -> None:
         """Report the selected base kernel's language and protocol metadata."""
 
         if self.session is None:

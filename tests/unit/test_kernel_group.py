@@ -8,6 +8,7 @@ import pytest
 import jupyter_distributed.kernel_group as kernel_group_module
 from jupyter_distributed.kernel_group import DistributedKernelGroup
 from jupyter_distributed.protocol import RankExecution
+from jupyter_distributed.rank_kernel import _RankOutputBuffer
 
 
 class FakeRankKernel:
@@ -78,6 +79,35 @@ async def test_execute_fans_out_concurrently() -> None:
     assert execution.execution_count == 1
     assert [result.rank for result in execution.ranks] == [0, 1]
     assert (await group.status()).state == "idle"
+
+
+def test_output_buffer_applies_stream_display_and_clear_updates() -> None:
+    buffer = _RankOutputBuffer(2)
+
+    assert buffer.handle("stream", {"name": "stderr", "text": "0%\r"})
+    assert buffer.handle("stream", {"name": "stderr", "text": "50%\r"})
+    assert buffer.handle("stream", {"name": "stderr", "text": "100%\n"})
+    assert buffer.snapshot()[0].content["text"] == "100%\n"
+
+    display = {
+        "data": {"text/plain": "first"},
+        "metadata": {},
+        "transient": {"display_id": "progress"},
+    }
+    assert buffer.handle("display_data", display)
+    assert buffer.handle(
+        "update_display_data",
+        {
+            **display,
+            "data": {"text/plain": "second"},
+        },
+    )
+    assert buffer.snapshot()[1].content["data"]["text/plain"] == "second"
+
+    assert not buffer.handle("clear_output", {"wait": True})
+    assert buffer.handle("stream", {"name": "stdout", "text": "after clear\n"})
+    assert len(buffer.snapshot()) == 1
+    assert buffer.snapshot()[0].content["text"] == "after clear\n"
 
 
 @pytest.mark.asyncio
