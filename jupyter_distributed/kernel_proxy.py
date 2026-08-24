@@ -156,6 +156,24 @@ class SPMDKernel(Kernel):
         content["debugger"] = False
         self.session.send(stream, "kernel_info_reply", content, parent, ident)
 
+    async def do_debug_request(self, msg: Mapping[str, Any]) -> dict[str, Any]:
+        """Reject debugger requests without raising in the control handler.
+
+        JupyterLab may probe debugger capabilities immediately after a restart
+        based on the selected base kernelspec, before it has processed this
+        proxy's ``kernel_info_reply``.  The base implementation raises
+        ``NotImplementedError``, which produces a noisy server log traceback.
+        Return a valid Debug Adapter Protocol error response instead.
+        """
+
+        return {
+            "type": "response",
+            "request_seq": msg.get("seq", 0),
+            "success": False,
+            "command": str(msg.get("command", "")),
+            "message": "Debugging is not supported for distributed processes.",
+        }
+
     async def do_shutdown(self, restart: bool) -> dict[str, Any]:
         await self.group.shutdown(now=True)
         return {"status": "ok", "restart": restart}

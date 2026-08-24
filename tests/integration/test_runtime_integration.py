@@ -129,6 +129,26 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
         assert info_reply["content"]["implementation"] == "ipython"
         assert info_reply["content"]["debugger"] is False
 
+        debug_request = client.session.msg(
+            "debug_request",
+            content={
+                "seq": 1,
+                "type": "request",
+                "command": "debugInfo",
+                "arguments": {},
+            },
+        )
+        client.control_channel.send(debug_request)
+        debug_reply = await client.get_control_msg(timeout=5)
+        assert debug_reply["msg_type"] == "debug_reply"
+        assert debug_reply["content"] == {
+            "type": "response",
+            "request_seq": 1,
+            "success": False,
+            "command": "debugInfo",
+            "message": "Debugging is not supported for distributed processes.",
+        }
+
         reply, data = await execute_through_proxy(
             client,
             "import os; saved = int(os.environ['RANK']); "
