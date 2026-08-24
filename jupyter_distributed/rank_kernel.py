@@ -1,4 +1,4 @@
-"""Control-plane wrapper around one ordinary ipykernel process."""
+"""Control-plane wrapper around one ordinary Jupyter kernel process."""
 
 from __future__ import annotations
 
@@ -23,16 +23,18 @@ class RankKernel:
         env: Mapping[str, str],
         *,
         kernel_name: str = "python3",
+        cwd: str | None = None,
         ready_timeout: float = 30.0,
     ) -> None:
         self.rank = rank
         self.env = dict(env)
+        self.cwd = cwd
         self.ready_timeout = ready_timeout
         self.manager = AsyncKernelManager(kernel_name=kernel_name)
         self.client: AsyncKernelClient | None = None
 
     async def start(self) -> None:
-        await self.manager.start_kernel(env=self.env)
+        await self.manager.start_kernel(env=self.env, cwd=self.cwd)
         client = self.manager.client()
         self.client = client
         client.start_channels()
@@ -44,7 +46,10 @@ class RankKernel:
             raise
 
     async def _install_breakpoint_hook(self) -> None:
-        if int(self.env["WORLD_SIZE"]) <= 1:
+        if (
+            int(self.env["WORLD_SIZE"]) <= 1
+            or str(self.manager.kernel_spec.language).lower() != "python"
+        ):
             return
         await self.execute(
             "import sys\n"
@@ -60,12 +65,14 @@ class RankKernel:
         *,
         silent: bool = False,
         store_history: bool = True,
+        user_expressions: Mapping[str, Any] | None = None,
     ) -> RankExecution:
         client = self._client()
         message_id = client.execute(
             code,
             silent=silent,
             store_history=store_history,
+            user_expressions=dict(user_expressions or {}),
             allow_stdin=False,
             stop_on_error=False,
         )
@@ -105,12 +112,14 @@ class RankKernel:
             reply=reply.get("content", {}),
         )
 
-    async def request(self, message_type: str, *args: Any) -> Mapping[str, Any]:
+    async def request(
+        self, message_type: str, *args: Any, **kwargs: Any
+    ) -> Mapping[str, Any]:
         """Send a simple shell request and return its matching content."""
 
         client = self._client()
         sender = getattr(client, message_type)
-        message_id = sender(*args)
+        message_id = sender(*args, **kwargs)
         reply = await self._shell_reply(message_id)
         return reply.get("content", {})
 

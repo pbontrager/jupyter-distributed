@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 from jupyter_client import AsyncKernelManager
 from jupyter_client.asynchronous.client import AsyncKernelClient
-from jupyter_client.kernelspec import KernelSpecManager
 
+from jupyter_distributed.coordinator import DistributedKernelCoordinator
 from jupyter_distributed.kernel_group import DistributedKernelGroup
 from jupyter_distributed.kernel_proxy import RANK_MIME
 
@@ -92,48 +90,62 @@ async def execute_through_proxy(
 
 
 @pytest.mark.asyncio
-async def test_proxy_entrypoint_mime_world_size_and_standard_interrupt(
-    tmp_path: Path,
+async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
 ) -> None:
-    kernel_dir = tmp_path / "distributed"
-    kernel_dir.mkdir()
-    (kernel_dir / "kernel.json").write_text(
-        json.dumps(
-            {
-                "argv": [
-                    sys.executable,
-                    "-m",
-                    "jupyter_distributed.kernel",
-                    "-f",
-                    "{connection_file}",
-                ],
-                "display_name": "Distributed Python",
-                "language": "python",
-                "interrupt_mode": "message",
-            }
-        )
-    )
-    manager = AsyncKernelManager(
-        kernel_name="distributed",
-        kernel_spec_manager=KernelSpecManager(kernel_dirs=[str(tmp_path)]),
-    )
+    manager = AsyncKernelManager(kernel_name="python3")
     await manager.start_kernel(cwd=str(Path.cwd()))
+
+    class SingleKernelManager:
+        def get_kernel(self, kernel_id: str) -> AsyncKernelManager:
+            assert kernel_id == "logical-kernel"
+            return manager
+
+        async def restart_kernel(self, kernel_id: str) -> None:
+            assert kernel_id == "logical-kernel"
+            await manager.restart_kernel(now=False)
+
+    coordinator = DistributedKernelCoordinator(SingleKernelManager())
     client = manager.client()
     client.start_channels()
     try:
         await client.wait_for_ready(timeout=20)
-        reply, _ = await execute_through_proxy(client, "%spmd_world_size 2")
-        assert reply["status"] == "ok"
-        assert (
-            reply["user_expressions"]["jupyter_distributed_world_size"]["data"]["text/plain"]
-            == "2"
-        )
+        assert coordinator.describe("logical-kernel")["world_size"] == 1
 
-        reply, data = await execute_through_proxy(client, "import os; int(os.environ['RANK'])")
+        model = await coordinator.set_world_size("logical-kernel", 2)
+        assert model == {
+            "kernel_id": "logical-kernel",
+            "kernel_name": "python3",
+            "world_size": 2,
+            "distributed": True,
+        }
+        assert manager.kernel_name == "python3"
+        await client.wait_for_ready(timeout=20)
+
+        info_id = client.kernel_info()
+        while True:
+            info_reply = await client.get_shell_msg(timeout=5)
+            if info_reply.get("parent_header", {}).get("msg_id") == info_id:
+                break
+        assert info_reply["content"]["implementation"] == "ipython"
+        assert info_reply["content"]["debugger"] is False
+
+        reply, data = await execute_through_proxy(
+            client,
+            "import os; saved = int(os.environ['RANK']); "
+            "(saved, int(os.environ['WORLD_SIZE']))",
+        )
         assert reply["status"] == "ok"
         assert data is not None
         assert set(data) >= {RANK_MIME, "text/html", "text/plain"}
         assert data[RANK_MIME]["world_size"] == 2
+
+        reply, data = await execute_through_proxy(client, "saved + 10")
+        assert reply["status"] == "ok"
+        values = [
+            rank["outputs"][-1]["content"]["data"]["text/plain"]
+            for rank in data[RANK_MIME]["ranks"]
+        ]
+        assert values == ["10", "11"]
 
         message_id = client.execute("import time; time.sleep(60)")
         while True:
@@ -158,6 +170,20 @@ async def test_proxy_entrypoint_mime_world_size_and_standard_interrupt(
         interrupted_reply = await client.get_shell_msg(timeout=5)
         assert interrupted_reply["content"]["status"] == "error"
         assert interrupted_data[RANK_MIME]["status"] == "error"
+
+        await manager.restart_kernel(now=False)
+        await client.wait_for_ready(timeout=20)
+        reply, data = await execute_through_proxy(client, "import os; os.environ['WORLD_SIZE']")
+        assert reply["status"] == "ok"
+        assert data[RANK_MIME]["world_size"] == 2
+
+        model = await coordinator.set_world_size("logical-kernel", 1)
+        assert model["distributed"] is False
+        assert manager.kernel_name == "python3"
+        await client.wait_for_ready(timeout=20)
+        reply, data = await execute_through_proxy(client, "1 + 1")
+        assert reply["status"] == "ok"
+        assert data is None
     finally:
         client.stop_channels()
         await manager.shutdown_kernel(now=False)

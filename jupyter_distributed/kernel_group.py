@@ -1,4 +1,4 @@
-"""Logical distributed kernel composed of persistent ordinary ipykernels."""
+"""Logical distributed kernel composed of persistent Jupyter kernels."""
 
 from __future__ import annotations
 
@@ -30,6 +30,7 @@ class DistributedKernelGroup:
         master_addr: str = "127.0.0.1",
         master_port: int | None = None,
         env: Mapping[str, str] | None = None,
+        cwd: str | None = None,
     ) -> None:
         if world_size < 1:
             raise ValueError("world_size must be at least 1")
@@ -38,6 +39,7 @@ class DistributedKernelGroup:
         self.master_addr = master_addr
         self.master_port = master_port
         self.base_env = {**os.environ, **(env or {})}
+        self.cwd = cwd
         self._ranks: list[RankKernel] = []
         self._state: Literal["stopped", "starting", "idle", "busy", "restarting"] = "stopped"
         self._execution_count = 0
@@ -62,6 +64,7 @@ class DistributedKernelGroup:
                 rank,
                 self._rank_env(rank, port),
                 kernel_name=self.kernel_name,
+                cwd=self.cwd,
             )
             for rank in range(self.world_size)
         ]
@@ -83,6 +86,7 @@ class DistributedKernelGroup:
         *,
         silent: bool = False,
         store_history: bool = True,
+        user_expressions: Mapping[str, Any] | None = None,
     ) -> GroupExecution:
         async with self._execution_lock:
             self._require_started()
@@ -92,7 +96,12 @@ class DistributedKernelGroup:
             try:
                 results = await asyncio.gather(
                     *(
-                        rank.execute(code, silent=silent, store_history=store_history)
+                        rank.execute(
+                            code,
+                            silent=silent,
+                            store_history=store_history,
+                            user_expressions=user_expressions,
+                        )
                         for rank in self._ranks
                     )
                 )
@@ -107,6 +116,14 @@ class DistributedKernelGroup:
     async def inspect(self, code: str, cursor_pos: int, detail_level: int = 0) -> Mapping[str, Any]:
         self._require_started()
         return await self._ranks[0].request("inspect", code, cursor_pos, detail_level)
+
+    async def kernel_info(self) -> Mapping[str, Any]:
+        self._require_started()
+        return await self._ranks[0].request("kernel_info")
+
+    async def is_complete(self, code: str) -> Mapping[str, Any]:
+        self._require_started()
+        return await self._ranks[0].request("is_complete", code)
 
     async def interrupt(self) -> None:
         await asyncio.gather(*(rank.interrupt() for rank in self._ranks), return_exceptions=True)

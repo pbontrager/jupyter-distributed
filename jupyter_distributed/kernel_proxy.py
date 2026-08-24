@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import html
 import os
-import re
 import signal
 import traceback
 from collections.abc import Mapping
@@ -18,7 +17,6 @@ from .kernel_group import DistributedKernelGroup
 from .protocol import GroupExecution
 
 RANK_MIME = "application/vnd.jupyter-distributed.rank+json"
-_WORLD_SIZE_COMMAND = re.compile(r"^\s*%spmd_world_size(?:\s+(\d+))?\s*$")
 
 
 def render_plain(execution: GroupExecution) -> str:
@@ -63,7 +61,9 @@ class SPMDKernel(Kernel):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.group = DistributedKernelGroup(
-            int(os.environ.get("JUPYTER_DISTRIBUTED_WORLD_SIZE", "1"))
+            int(os.environ.get("JUPYTER_DISTRIBUTED_WORLD_SIZE", "1")),
+            kernel_name=os.environ.get("JUPYTER_DISTRIBUTED_BASE_KERNEL", "python3"),
+            cwd=os.environ.get("JUPYTER_DISTRIBUTED_CWD") or None,
         )
         self._execution_loop: asyncio.AbstractEventLoop | None = None
 
@@ -91,23 +91,13 @@ class SPMDKernel(Kernel):
         cell_id: str | None = None,
     ) -> dict[str, Any]:
         self._execution_loop = asyncio.get_running_loop()
-        command = _WORLD_SIZE_COMMAND.match(code)
-        if command:
-            requested = command.group(1)
-            if requested is None:
-                return await self._emit_world_size(silent)
-            world_size = int(requested)
-            if world_size < 1:
-                return self._error("ValueError", "world size must be at least 1")
-            if self.group.ranks:
-                await self.group.restart(world_size)
-            else:
-                self.group.world_size = world_size
-                await self.group.start()
-            return await self._emit_world_size(silent)
-
         await self._ensure_started()
-        execution = await self.group.execute(code, silent=silent, store_history=store_history)
+        execution = await self.group.execute(
+            code,
+            silent=silent,
+            store_history=store_history,
+            user_expressions=user_expressions,
+        )
         if not silent:
             data = {
                 RANK_MIME: execution.as_dict(),
@@ -124,7 +114,9 @@ class SPMDKernel(Kernel):
                 "status": "ok",
                 "execution_count": execution.execution_count,
                 "payload": [],
-                "user_expressions": {},
+                "user_expressions": dict(
+                    execution.ranks[0].reply.get("user_expressions", {})
+                ),
             }
         failed = next(result for result in execution.ranks if result.status != "ok")
         return self._error(
@@ -132,29 +124,6 @@ class SPMDKernel(Kernel):
             f"cell failed on rank {failed.rank}",
             execution.execution_count,
         )
-
-    async def _emit_world_size(self, silent: bool) -> dict[str, Any]:
-        if not silent:
-            self.send_response(
-                self.iopub_socket,
-                "stream",
-                {
-                    "name": "stdout",
-                    "text": f"Jupyter Distributed world size: {self.group.world_size}\n",
-                },
-            )
-        return {
-            "status": "ok",
-            "execution_count": self.group.execution_count,
-            "payload": [],
-            "user_expressions": {
-                "jupyter_distributed_world_size": {
-                    "status": "ok",
-                    "data": {"text/plain": str(self.group.world_size)},
-                    "metadata": {},
-                }
-            },
-        }
 
     async def do_complete(self, code: str, cursor_pos: int) -> Mapping[str, Any]:
         await self._ensure_started()
@@ -169,6 +138,23 @@ class SPMDKernel(Kernel):
     ) -> Mapping[str, Any]:
         await self._ensure_started()
         return await self.group.inspect(code, cursor_pos, detail_level)
+
+    async def do_is_complete(self, code: str) -> Mapping[str, Any]:
+        await self._ensure_started()
+        return await self.group.is_complete(code)
+
+    async def kernel_info_request(
+        self, stream: Any, ident: Any, parent: Mapping[str, Any]
+    ) -> None:
+        """Report the selected base kernel's language and protocol metadata."""
+
+        if self.session is None:
+            return
+        await self._ensure_started()
+        content = dict(await self.group.kernel_info())
+        content.setdefault("status", "ok")
+        content["debugger"] = False
+        self.session.send(stream, "kernel_info_reply", content, parent, ident)
 
     async def do_shutdown(self, restart: bool) -> dict[str, Any]:
         await self.group.shutdown(now=True)
