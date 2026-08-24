@@ -76,7 +76,14 @@ export class DebuggerRankSelector extends Widget {
         rankThreads.map(item => [item.rank, item.threadId])
       );
       this._replaceOptions(rankThreads.map(item => item.rank));
-      this.setHidden(rankThreads.length === 0);
+      const visible = rankThreads.length > 0;
+      this.setHidden(!visible);
+      if (visible) {
+        requestAnimationFrame(() => {
+          this.parent?.fit();
+          this.parent?.update();
+        });
+      }
       if (rankThreads.length === 0) {
         return;
       }

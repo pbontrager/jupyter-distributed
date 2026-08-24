@@ -24,6 +24,8 @@
 
 .jp-JupyterDistributedDebuggerRank {
   box-sizing: border-box;
+  min-height: 42px;
+  overflow: visible;
   padding: 8px 12px;
 }
 
@@ -39,6 +41,7 @@
   border-radius: 2px;
   color: var(--jp-ui-font-color1);
   flex: 1;
+  height: 24px;
   min-width: 0;
 }
 
