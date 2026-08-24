@@ -48,8 +48,8 @@ class DistributedKernelCoordinator:
     async def set_world_size(self, kernel_id: str, world_size: int) -> dict[str, Any]:
         if isinstance(world_size, bool) or not isinstance(world_size, int):
             raise TypeError("world_size must be an integer")
-        if not 1 <= world_size <= 256:
-            raise ValueError("world_size must be between 1 and 256")
+        if world_size < 1:
+            raise ValueError("world_size must be greater than zero")
 
         lock = self._locks.setdefault(kernel_id, asyncio.Lock())
         async with lock:

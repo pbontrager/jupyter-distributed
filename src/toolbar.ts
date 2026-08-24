@@ -6,8 +6,6 @@ import { ServerConnection } from '@jupyterlab/services';
 import { DisposableDelegate, IDisposable } from '@lumino/disposable';
 import { Widget } from '@lumino/widgets';
 
-const WORLD_SIZES = [1, 2, 4, 8] as const;
-
 interface DistributedKernelModel {
   kernel_id: string;
   kernel_name: string;
@@ -20,9 +18,10 @@ class ProcessSelector extends Widget {
     super({ node: Private.createNode() });
     this.addClass('jp-JupyterDistributedProcessSelector');
     this._panel = panel;
-    this._select = this.node.querySelector('select')!;
+    this._input = this.node.querySelector('input')!;
 
-    this._select.addEventListener('change', this._onChange);
+    this._input.addEventListener('change', this._onChange);
+    this._input.addEventListener('keydown', this._onKeyDown);
     panel.sessionContext.sessionChanged.connect(this._onKernelChanged, this);
     panel.sessionContext.kernelChanged.connect(this._onKernelChanged, this);
     this._syncVisibility();
@@ -33,7 +32,8 @@ class ProcessSelector extends Widget {
     if (this.isDisposed) {
       return;
     }
-    this._select.removeEventListener('change', this._onChange);
+    this._input.removeEventListener('change', this._onChange);
+    this._input.removeEventListener('keydown', this._onKeyDown);
     this._panel.sessionContext.sessionChanged.disconnect(
       this._onKernelChanged,
       this
@@ -52,7 +52,7 @@ class ProcessSelector extends Widget {
   private _syncVisibility(): void {
     const connected = this._kernelId() !== undefined;
     this.setHidden(!connected);
-    this._select.disabled = !connected || this._pending;
+    this._input.disabled = !connected || this._pending;
   }
 
   private _onKernelChanged = (): void => {
@@ -80,9 +80,18 @@ class ProcessSelector extends Widget {
 
   private _onChange = async (): Promise<void> => {
     const kernelId = this._kernelId();
-    const previous = Number(this._select.dataset.worldSize ?? '1');
-    const next = Number(this._select.value);
-    this._select.value = String(previous);
+    const previous = Number(this._input.dataset.worldSize ?? '1');
+    const rawValue = this._input.value.trim();
+    const next = Number(rawValue);
+    this._input.value = String(previous);
+
+    if (!/^[1-9]\d*$/.test(rawValue) || !Number.isSafeInteger(next)) {
+      await showErrorMessage(
+        'Invalid process count',
+        'Processes must be a positive integer.'
+      );
+      return;
+    }
 
     if (!kernelId || next === previous) {
       return;
@@ -124,12 +133,18 @@ class ProcessSelector extends Widget {
     }
   };
 
+  private _onKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      this._input.blur();
+    }
+  };
+
   private _setWorldSize(worldSize: number): void {
-    const value = WORLD_SIZES.some(candidate => candidate === worldSize)
-      ? worldSize
-      : 1;
-    this._select.value = String(value);
-    this._select.dataset.worldSize = String(value);
+    const value =
+      Number.isSafeInteger(worldSize) && worldSize > 0 ? worldSize : 1;
+    this._input.value = String(value);
+    this._input.dataset.worldSize = String(value);
   }
 
   private async _request(
@@ -162,7 +177,7 @@ class ProcessSelector extends Widget {
 
   private _panel: NotebookPanel;
   private _pending = false;
-  private _select: HTMLSelectElement;
+  private _input: HTMLInputElement;
   private _syncRequest = 0;
 }
 
@@ -191,20 +206,19 @@ namespace Private {
   export function createNode(): HTMLElement {
     const wrapper = document.createElement('label');
     const text = document.createElement('span');
-    const select = document.createElement('select');
+    const input = document.createElement('input');
 
     text.textContent = 'Processes:';
     text.className = 'jp-JupyterDistributedProcessSelector-label';
-    select.className = 'jp-JupyterDistributedProcessSelector-select';
-    select.setAttribute('aria-label', 'Kernel process count');
-    for (const size of WORLD_SIZES) {
-      const option = document.createElement('option');
-      option.value = String(size);
-      option.textContent = String(size);
-      select.appendChild(option);
-    }
-    select.dataset.worldSize = '1';
-    wrapper.append(text, select);
+    input.className = 'jp-JupyterDistributedProcessSelector-input';
+    input.type = 'text';
+    input.inputMode = 'numeric';
+    input.pattern = '[1-9][0-9]*';
+    input.value = '1';
+    input.dataset.worldSize = '1';
+    input.setAttribute('aria-label', 'Kernel process count');
+    input.setAttribute('autocomplete', 'off');
+    wrapper.append(text, input);
     return wrapper;
   }
 }

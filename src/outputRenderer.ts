@@ -5,6 +5,7 @@ import { Signal } from '@lumino/signaling';
 import { Panel, Widget } from '@lumino/widgets';
 
 export const MIME_TYPE = 'application/vnd.jupyter-distributed.rank+json';
+const MIN_RANK_TAB_WIDTH = 72;
 
 type OutputType =
   | 'stream'
@@ -64,6 +65,10 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
     this._panel = panel;
     this._selections = selections;
     selections.changed.connect(this._onSelectionChanged, this);
+    this._resizeObserver = new ResizeObserver(() => {
+      this._updateNavigationMode();
+    });
+    this._resizeObserver.observe(this.node);
   }
 
   async renderModel(model: IRenderMime.IMimeModel): Promise<void> {
@@ -88,7 +93,14 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
     const tabs = new Widget({ node: document.createElement('div') });
     tabs.addClass('jp-JupyterDistributedRankOutput-tabs');
     tabs.node.setAttribute('role', 'tablist');
+    this._tabs = tabs;
     this.addWidget(tabs);
+
+    const picker = new Widget({ node: Private.createRankPickerNode() });
+    picker.addClass('jp-JupyterDistributedRankOutput-picker');
+    this._rankSelect = picker.node.querySelector('select')!;
+    this._rankSelect.addEventListener('change', this._onDropdownChange);
+    this.addWidget(picker);
 
     for (const rank of ranks) {
       const button = document.createElement('button');
@@ -107,6 +119,13 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
       });
       tabs.node.appendChild(button);
 
+      const option = document.createElement('option');
+      option.value = String(rank.rank);
+      option.textContent = rank.error
+        ? `Rank ${rank.rank} — error`
+        : `Rank ${rank.rank}`;
+      this._rankSelect.appendChild(option);
+
       const content = new Panel();
       content.addClass('jp-JupyterDistributedRankOutput-rank');
       content.node.dataset.rank = String(rank.rank);
@@ -120,6 +139,7 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
     }
 
     this._select(this._selectedRank);
+    this._updateNavigationMode();
   }
 
   dispose(): void {
@@ -127,16 +147,20 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
       return;
     }
     this._selections.changed.disconnect(this._onSelectionChanged, this);
+    this._resizeObserver.disconnect();
     this._clear();
     super.dispose();
   }
 
   private _clear(): void {
+    this._rankSelect?.removeEventListener('change', this._onDropdownChange);
     while (this.widgets.length > 0) {
       this.widgets[0].dispose();
     }
     this._content.clear();
     this._ranks = [];
+    this._tabs = null;
+    this._rankSelect = null;
   }
 
   private async _renderOutput(
@@ -197,12 +221,16 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
       return;
     }
     this._selectedRank = rank;
-    const tabs = this.widgets[0]?.node;
-    tabs?.querySelectorAll<HTMLButtonElement>('[data-rank]').forEach(button => {
-      const selected = Number(button.dataset.rank) === rank;
-      button.classList.toggle('jp-mod-selected', selected);
-      button.setAttribute('aria-selected', String(selected));
-    });
+    this._tabs?.node
+      .querySelectorAll<HTMLButtonElement>('[data-rank]')
+      .forEach(button => {
+        const selected = Number(button.dataset.rank) === rank;
+        button.classList.toggle('jp-mod-selected', selected);
+        button.setAttribute('aria-selected', String(selected));
+      });
+    if (this._rankSelect) {
+      this._rankSelect.value = String(rank);
+    }
     for (const [candidate, content] of this._content) {
       content.setHidden(candidate !== rank);
     }
@@ -217,16 +245,45 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
     }
   }
 
+  private _onDropdownChange = (): void => {
+    if (!this._rankSelect) {
+      return;
+    }
+    const rank = Number(this._rankSelect.value);
+    this._selections.set(this._panel, rank);
+    this._select(rank);
+  };
+
+  private _updateNavigationMode(): void {
+    const width = this.node.getBoundingClientRect().width;
+    const useDropdown =
+      width > 0 && this._ranks.length * MIN_RANK_TAB_WIDTH > width;
+    this.toggleClass('jp-mod-rankDropdown', useDropdown);
+  }
+
   private _content = new Map<number, Panel>();
   private _mimeType: string;
   private _panel: NotebookPanel | null;
+  private _rankSelect: HTMLSelectElement | null = null;
   private _ranks: number[] = [];
   private _rendermime: IRenderMimeRegistry;
+  private _resizeObserver: ResizeObserver;
   private _selectedRank = 0;
   private _selections: RankSelectionModel;
+  private _tabs: Widget | null = null;
 }
 
 namespace Private {
+  export function createRankPickerNode(): HTMLElement {
+    const label = document.createElement('label');
+    const text = document.createElement('span');
+    const select = document.createElement('select');
+    text.textContent = 'Output:';
+    select.setAttribute('aria-label', 'Displayed process rank');
+    label.append(text, select);
+    return label;
+  }
+
   export function normalizePayload(value: unknown): RankRecord[] {
     if (Array.isArray(value)) {
       return value

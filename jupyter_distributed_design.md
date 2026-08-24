@@ -86,7 +86,7 @@ Responsibilities:
 - Add a toolbar control to notebooks, ideally near the kernel name/status:
 
   ```text
-  Kernel: Python 3    Processes: [ 1 v ]
+  Kernel: Python 3    Processes: [ 1 ]
   ```
 
 - Default world size to `1`, preserving normal Jupyter behavior.
@@ -277,6 +277,10 @@ Render a compact tab strip for distributed cells:
 [ Rank 0 ] [ Rank 1 ] [ Rank 2 ] [ Rank 3 ]
 ```
 
+Keep tabs while each rank can retain a reasonable minimum width. When the
+available output width cannot fit them, replace the tab strip with a rank
+dropdown while preserving the selected rank.
+
 The selected tab displays that rank's stdout/stderr/rich outputs/exceptions.
 
 Useful behavior:
@@ -313,15 +317,8 @@ Primary control:
 Processes: [1 v]
 ```
 
-Suggested options:
-
-```text
-1
-2
-4
-8
-Custom...
-```
+Accept any positive integer and reject empty, fractional, zero, or negative
+values before requesting a restart.
 
 Do not call it "parallel kernels" in the primary UI. The user should think of process/world size as a property of the notebook kernel.
 

@@ -42,13 +42,14 @@ the desired build into the uv environment.
 
 1. Start Lab with `uv run jupyter lab` and create a notebook using your normal
    kernel, such as **Python 3**.
-2. Leave **Processes: 1** for normal single-process work, or choose 2, 4, or 8.
-   Changing it restarts the complete kernel group and clears
-   in-memory state.
+2. Leave **Processes: 1** for normal single-process work, or enter any positive
+   integer. Changing it restarts the complete kernel group and clears in-memory
+   state.
 3. Execute ordinary cells with Shift+Enter. Every live rank receives the same
    source concurrently.
 4. Use the output tabs to inspect stdout, rich results, and exceptions from
-   each rank. The notebook retains one logical execution count.
+   each rank. When the tabs no longer fit, the same control automatically
+   becomes a rank dropdown. The notebook retains one logical execution count.
 5. Interrupt, restart, and shut down with the standard Jupyter commands; those
    actions apply to the whole group.
 

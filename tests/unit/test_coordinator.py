@@ -71,8 +71,19 @@ async def test_rejects_invalid_world_sizes_without_restart() -> None:
     manager = FakeKernelManager()
     coordinator = DistributedKernelCoordinator(manager)
 
-    for value in (True, 0, 257, 1.5):
+    for value in (True, 0, -1, 1.5):
         with pytest.raises((TypeError, ValueError)):
             await coordinator.set_world_size("kernel-id", value)  # type: ignore[arg-type]
 
     assert manager.restarts == 0
+
+
+@pytest.mark.asyncio
+async def test_accepts_arbitrary_positive_process_count() -> None:
+    manager = FakeKernelManager()
+    coordinator = DistributedKernelCoordinator(manager)
+
+    model = await coordinator.set_world_size("kernel-id", 257)
+
+    assert model["world_size"] == 257
+    assert manager.kernel._launch_args["env"]["JUPYTER_DISTRIBUTED_WORLD_SIZE"] == "257"
