@@ -1,0 +1,13 @@
+.DS_Store
+.nodeenv/
+.pytest_cache/
+.ruff_cache/
+.venv/
+.worktrees/
+.yarn/
+__pycache__/
+*.py[cod]
+dist/
+lib/
+node_modules/
+tsconfig.tsbuildinfo

@@ -1,4 +1,4 @@
-# Interactive SPMD Jupyter Kernel — Design & Implementation Handoff
+# Jupyter Distributed — Interactive SPMD Kernel Design & Implementation Handoff
 
 **Status:** implementation design / agent handoff  
 **Primary target:** JupyterLab 4.x + Jupyter Server + PyTorch distributed  
@@ -427,7 +427,7 @@ For MVP, provide one or both of:
 1. a small helper API for interactive initialization with a long timeout, e.g.:
 
    ```python
-   from spmd_jupyter import init_process_group
+   from jupyter_distributed import init_process_group
    init_process_group(timeout="24h")
    ```
 
@@ -471,7 +471,7 @@ Use a single Python distribution that includes the server extension, Python runt
 Suggested layout:
 
 ```text
-spmd-jupyter/
+jupyter-distributed/
 ├── pyproject.toml
 ├── README.md
 ├── LICENSE
@@ -486,7 +486,7 @@ spmd-jupyter/
 │   ├── commands.ts                 # restart/interrupt integration
 │   └── style/
 │       └── index.css
-├── spmd_jupyter/                   # Python package
+├── jupyter_distributed/            # Python package
 │   ├── __init__.py
 │   ├── _version.py
 │   ├── server_extension.py         # Jupyter Server extension registration
@@ -537,9 +537,9 @@ A distributed session should have one logical identity plus rank metadata.
 If additional extension APIs are needed, keep them narrow. For example:
 
 ```text
-GET  /spmd-jupyter/session/<kernel-id>
-POST /spmd-jupyter/session/<kernel-id>/world-size
-GET  /spmd-jupyter/session/<kernel-id>/ranks
+GET  /jupyter-distributed/session/<kernel-id>
+POST /jupyter-distributed/session/<kernel-id>/world-size
+GET  /jupyter-distributed/session/<kernel-id>/ranks
 ```
 
 Potential websocket/control channel messages:

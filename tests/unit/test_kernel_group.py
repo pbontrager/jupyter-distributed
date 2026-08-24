@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 from typing import Any, ClassVar
 
-import jupyter_distributed.kernel_group as kernel_group_module
 import pytest
+
+import jupyter_distributed.kernel_group as kernel_group_module
 from jupyter_distributed.kernel_group import DistributedKernelGroup
 from jupyter_distributed.protocol import RankExecution
 

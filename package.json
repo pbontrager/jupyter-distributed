@@ -2,7 +2,7 @@
   "name": "jupyter-distributed",
   "version": "0.1.0",
   "description": "Jupyter Distributed controls and rank-aware output rendering for SPMD kernels",
-  "license": "BSD-3-Clause",
+  "license": "MIT",
   "author": "Jupyter Distributed contributors",
   "files": [
     "lib/**/*.{js,js.map,d.ts,tsbuildinfo}",
@@ -39,5 +39,6 @@
   "jupyterlab": {
     "extension": true,
     "outputDir": "jupyter_distributed/labextension"
-  }
+  },
+  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
 }

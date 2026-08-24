@@ -10,6 +10,7 @@ import pytest
 from jupyter_client import AsyncKernelManager
 from jupyter_client.asynchronous.client import AsyncKernelClient
 from jupyter_client.kernelspec import KernelSpecManager
+
 from jupyter_distributed.kernel_group import DistributedKernelGroup
 from jupyter_distributed.kernel_proxy import RANK_MIME
 
@@ -123,6 +124,10 @@ async def test_proxy_entrypoint_mime_world_size_and_standard_interrupt(
         await client.wait_for_ready(timeout=20)
         reply, _ = await execute_through_proxy(client, "%spmd_world_size 2")
         assert reply["status"] == "ok"
+        assert (
+            reply["user_expressions"]["jupyter_distributed_world_size"]["data"]["text/plain"]
+            == "2"
+        )
 
         reply, data = await execute_through_proxy(client, "import os; int(os.environ['RANK'])")
         assert reply["status"] == "ok"
@@ -156,3 +161,29 @@ async def test_proxy_entrypoint_mime_world_size_and_standard_interrupt(
     finally:
         client.stop_channels()
         await manager.shutdown_kernel(now=False)
+
+
+@pytest.mark.asyncio
+async def test_two_rank_gloo_collective_persists_across_cells() -> None:
+    pytest.importorskip("torch")
+    group = DistributedKernelGroup(2)
+    try:
+        await group.start()
+        initialized = await group.execute(
+            "from datetime import timedelta\n"
+            "import os\n"
+            "import torch\n"
+            "import torch.distributed as dist\n"
+            "dist.init_process_group('gloo', timeout=timedelta(seconds=30))\n"
+            "value = torch.tensor([int(os.environ['RANK']) + 1.0])\n"
+            "dist.all_reduce(value)"
+        )
+        assert initialized.status == "ok"
+
+        persisted = await group.execute("value.item(), dist.is_initialized()")
+        assert [output_text(rank) for rank in persisted.ranks] == ["(3.0, True)", "(3.0, True)"]
+
+        destroyed = await group.execute("dist.destroy_process_group()")
+        assert destroyed.status == "ok"
+    finally:
+        await group.shutdown(now=True)

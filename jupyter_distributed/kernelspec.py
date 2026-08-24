@@ -28,6 +28,7 @@ def kernel_spec() -> dict[str, object]:
         ],
         "display_name": DISPLAY_NAME,
         "language": "python",
+        "interrupt_mode": "message",
         "metadata": {
             "debugger": True,
             "jupyter_distributed": {"world_size": 1},

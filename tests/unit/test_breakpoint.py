@@ -1,4 +1,5 @@
 import pytest
+
 from jupyter_distributed.breakpoint import (
     DistributedBreakpointError,
     distributed_breakpoint,

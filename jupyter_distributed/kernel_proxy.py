@@ -147,7 +147,13 @@ class SPMDKernel(Kernel):
             "status": "ok",
             "execution_count": self.group.execution_count,
             "payload": [],
-            "user_expressions": {},
+            "user_expressions": {
+                "jupyter_distributed_world_size": {
+                    "status": "ok",
+                    "data": {"text/plain": str(self.group.world_size)},
+                    "metadata": {},
+                }
+            },
         }
 
     async def do_complete(self, code: str, cursor_pos: int) -> Mapping[str, Any]:

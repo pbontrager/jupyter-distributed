@@ -46,8 +46,8 @@ the desired build into the uv environment.
 
 1. Start Lab with `uv run jupyter lab` and create a normal notebook using
    **Jupyter Distributed**.
-2. Leave **Processes: 1** for normal single-process work, or choose 2, 4, 8, or
-   a custom value. Changing it restarts the complete kernel group and clears
+2. Leave **Processes: 1** for normal single-process work, or choose 2, 4, or 8.
+   Changing it restarts the complete kernel group and clears
    in-memory state.
 3. Execute ordinary cells with Shift+Enter. Every live rank receives the same
    source concurrently.
@@ -114,8 +114,9 @@ run checks with uv-managed commands:
 
 ```bash
 uv sync --group dev --extra distributed
-uv run jlpm install
-uv run jlpm build
+uv run --with nodeenv python -m nodeenv --node=20.19.0 .nodeenv
+PATH="$PWD/.nodeenv/bin:$PATH" uv run jlpm install
+PATH="$PWD/.nodeenv/bin:$PATH" uv run jlpm build
 uv run pytest
 uv run ruff check .
 uv build
@@ -154,8 +155,8 @@ long-lived environment.
   supported.
 - One notebook maps to one logical group; arbitrary rank-targeted execution is
   not a primary workflow.
-- Regular `input()` is limited to the runtime's rank-0 routing policy. Do not
-  create competing interactive stdin readers on multiple ranks.
+- Regular `input()` is not supported by the MVP rank workers; executions reject
+  stdin instead of allowing multiple ranks to compete for the notebook channel.
 - An ordinary Python error is reported per rank without intentionally killing
   the group, but a failed user collective can leave its process group unusable.
 - Distributed `breakpoint()` support is intentionally conservative in the MVP;
