@@ -1,0 +1,48 @@
+{
+  "name": "jupyter-distributed",
+  "version": "0.1.0",
+  "description": "Jupyter Distributed controls and rank-aware output rendering for SPMD kernels",
+  "license": "BSD-3-Clause",
+  "author": "Jupyter Distributed contributors",
+  "files": [
+    "lib/**/*.{js,js.map,d.ts,tsbuildinfo}",
+    "style/**/*.css"
+  ],
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "style": "style/index.css",
+  "scripts": {
+    "build": "jlpm build:lib && jlpm build:labextension:dev",
+    "build:lib": "tsc",
+    "build:labextension": "jupyter labextension build .",
+    "build:labextension:dev": "jupyter labextension build . --development True",
+    "clean": "jlpm clean:lib && jlpm clean:labextension",
+    "clean:lib": "rimraf lib tsconfig.tsbuildinfo",
+    "clean:labextension": "rimraf jupyter_distributed/labextension"
+  },
+  "dependencies": {
+    "@jupyterlab/application": "^4.0.0",
+    "@jupyterlab/apputils": "^4.0.0",
+    "@jupyterlab/docregistry": "^4.0.0",
+    "@jupyterlab/notebook": "^4.0.0",
+    "@jupyterlab/rendermime": "^4.0.0",
+    "@jupyterlab/rendermime-interfaces": "^3.8.0",
+    "@lumino/disposable": "^2.1.0",
+    "@lumino/signaling": "^2.1.0",
+    "@lumino/widgets": "^2.4.0"
+  },
+  "devDependencies": {
+    "@jupyterlab/builder": "^4.0.0",
+    "rimraf": "^5.0.0",
+    "typescript": "~5.9.3"
+  },
+  "jupyterlab": {
+    "extension": true,
+    "outputDir": "jupyter_distributed/labextension",
+    "_build": {
+      "load": "static/remoteEntry.19b695436bae5a3e89f7.js",
+      "extension": "./extension",
+      "style": "./style"
+    }
+  }
+}
