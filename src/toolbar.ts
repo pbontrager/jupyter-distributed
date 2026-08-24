@@ -5,6 +5,7 @@ import { DisposableDelegate, IDisposable } from '@lumino/disposable';
 import { Widget } from '@lumino/widgets';
 
 const WORLD_SIZES = [1, 2, 4, 8] as const;
+const WORLD_SIZE_EXPRESSION = 'jupyter_distributed_world_size';
 
 /** World-size choices are scoped to the logical Jupyter session. */
 export class WorldSizeState {
@@ -30,8 +31,10 @@ class ProcessSelector extends Widget {
     this._select = this.node.querySelector('select')!;
 
     this._select.addEventListener('change', this._onChange);
-    panel.sessionContext.sessionChanged.connect(this._sync, this);
-    this._sync();
+    panel.sessionContext.sessionChanged.connect(this._onKernelChanged, this);
+    panel.sessionContext.kernelChanged.connect(this._onKernelChanged, this);
+    this._syncLocal();
+    void this._syncFromKernel();
   }
 
   dispose(): void {
@@ -39,7 +42,14 @@ class ProcessSelector extends Widget {
       return;
     }
     this._select.removeEventListener('change', this._onChange);
-    this._panel.sessionContext.sessionChanged.disconnect(this._sync, this);
+    this._panel.sessionContext.sessionChanged.disconnect(
+      this._onKernelChanged,
+      this
+    );
+    this._panel.sessionContext.kernelChanged.disconnect(
+      this._onKernelChanged,
+      this
+    );
     super.dispose();
   }
 
@@ -47,8 +57,51 @@ class ProcessSelector extends Widget {
     return this._panel.sessionContext.session?.id;
   }
 
-  private _sync(): void {
+  private _syncLocal(): void {
     this._select.value = String(this._state.get(this._sessionId()));
+  }
+
+  private _onKernelChanged = (): void => {
+    this._syncLocal();
+    void this._syncFromKernel();
+  };
+
+  private async _syncFromKernel(): Promise<void> {
+    const kernel = this._panel.sessionContext.session?.kernel;
+    const sessionId = this._sessionId();
+    const request = ++this._syncRequest;
+    if (!kernel || !sessionId) {
+      return;
+    }
+
+    try {
+      const future = kernel.requestExecute({
+        code: '%spmd_world_size',
+        silent: true,
+        store_history: false,
+        user_expressions: { [WORLD_SIZE_EXPRESSION]: 'None' },
+        allow_stdin: false,
+        stop_on_error: false
+      });
+      const reply = await future.done;
+      if (
+        request !== this._syncRequest ||
+        kernel !== this._panel.sessionContext.session?.kernel ||
+        sessionId !== this._sessionId() ||
+        reply.content.status !== 'ok'
+      ) {
+        return;
+      }
+
+      const expression = reply.content.user_expressions[WORLD_SIZE_EXPRESSION];
+      const value = Private.worldSizeFromExpression(expression);
+      if (value !== null) {
+        this._state.set(sessionId, value);
+        this._select.value = String(value);
+      }
+    } catch {
+      // Kernels without the query magic retain the local/default selection.
+    }
   }
 
   private _onChange = async (): Promise<void> => {
@@ -120,6 +173,7 @@ class ProcessSelector extends Widget {
   private _panel: NotebookPanel;
   private _select: HTMLSelectElement;
   private _state: WorldSizeState;
+  private _syncRequest = 0;
 }
 
 export class ProcessToolbarExtension
@@ -150,6 +204,22 @@ export class ProcessToolbarExtension
 }
 
 namespace Private {
+  export function worldSizeFromExpression(value: unknown): number | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+    const data = (value as { data?: unknown }).data;
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      return null;
+    }
+    const text = (data as Record<string, unknown>)['text/plain'];
+    if (typeof text !== 'string') {
+      return null;
+    }
+    const parsed = Number(text.replace(/^(['"])(.*)\1$/, '$2'));
+    return WORLD_SIZES.some(size => size === parsed) ? parsed : null;
+  }
+
   export function createNode(): HTMLElement {
     const wrapper = document.createElement('label');
     const text = document.createElement('span');
