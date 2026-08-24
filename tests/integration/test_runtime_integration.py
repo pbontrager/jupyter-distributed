@@ -51,12 +51,12 @@ async def test_two_rank_environment_state_outputs_errors_and_restart() -> None:
         assert [rank.status for rank in errored.ranks] == ["ok", "error"]
         assert any(output.kind == "error" for output in errored.ranks[1].outputs)
 
-        blocked_debugger = await group.execute("breakpoint()")
-        assert blocked_debugger.status == "error"
-        assert all(rank.status == "error" for rank in blocked_debugger.ranks)
-        assert "disabled for this Jupyter Distributed kernel" in output_text(
-            blocked_debugger.ranks[0]
-        )
+        unattached_breakpoint = await group.execute("breakpoint(); 'still running'")
+        assert unattached_breakpoint.status == "ok"
+        assert [output_text(rank) for rank in unattached_breakpoint.ranks] == [
+            "'still running'",
+            "'still running'",
+        ]
 
         old_ranks = tuple(group.ranks)
         await group.restart(1)
@@ -113,7 +113,9 @@ async def debug_through_proxy(
 
 
 @pytest.mark.asyncio
-async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle() -> None:
+async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
+    tmp_path: Path,
+) -> None:
     manager = AsyncKernelManager(kernel_name="python3")
     await manager.start_kernel(cwd=str(Path.cwd()))
 
@@ -280,10 +282,73 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle()
             rank["outputs"][-1]["content"]["data"]["text/plain"]
             for rank in debug_data[RANK_MIME]["ranks"]
         ] == ["10", "11"]
+
+        external_source = tmp_path / "debug_target.py"
+        external_source.write_text(
+            "import os\n\n"
+            "def external_value():\n"
+            "    rank = int(os.environ['RANK'])\n"
+            "    breakpoint()\n"
+            "    return rank + 20\n",
+            encoding="utf-8",
+        )
+        external_execution_id = client.execute(
+            f"import sys\nsys.path.insert(0, {str(tmp_path)!r})\n"
+            "from debug_target import external_value\nexternal_value()"
+        )
+        external_stopped_threads: list[int] = []
+        while len(external_stopped_threads) < 2:
+            message = await client.get_iopub_msg(timeout=30)
+            if (
+                message["msg_type"] == "debug_event"
+                and message["content"].get("event") == "stopped"
+            ):
+                external_stopped_threads.append(message["content"]["body"]["threadId"])
+        for sequence, thread_id in enumerate(external_stopped_threads, start=42):
+            stack = await debug_through_proxy(
+                client,
+                sequence,
+                "stackTrace",
+                {"threadId": thread_id, "startFrame": 0, "levels": 1},
+            )
+            frame = stack["body"]["stackFrames"][0]
+            assert Path(frame["source"]["path"]) == external_source
+            assert frame["line"] == 6
+
         assert (
             await debug_through_proxy(
                 client,
-                41,
+                44,
+                "continue",
+                {"threadId": external_stopped_threads[0]},
+            )
+        )["success"] is True
+        external_data = None
+        while True:
+            message = await client.get_iopub_msg(timeout=30)
+            if message.get("parent_header", {}).get("msg_id") != external_execution_id:
+                continue
+            if message["msg_type"] in {"display_data", "update_display_data"}:
+                external_data = message["content"]["data"]
+            if message["msg_type"] == "status" and message["content"]["execution_state"] == "idle":
+                break
+        while True:
+            external_execution_reply = await client.get_shell_msg(timeout=5)
+            if (
+                external_execution_reply.get("parent_header", {}).get("msg_id")
+                == external_execution_id
+            ):
+                break
+        assert external_execution_reply["content"]["status"] == "ok"
+        assert external_data is not None
+        assert [
+            rank["outputs"][-1]["content"]["data"]["text/plain"]
+            for rank in external_data[RANK_MIME]["ranks"]
+        ] == ["20", "21"]
+        assert (
+            await debug_through_proxy(
+                client,
+                45,
                 "disconnect",
                 {"restart": False, "terminateDebuggee": False},
             )

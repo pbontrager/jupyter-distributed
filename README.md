@@ -47,9 +47,10 @@ step in, and step out apply to all paused processes together, while stack frames
 and variables are inspected for the selected rank thread.
 
 This is the first-stage debugging interface: ranks appear as threads in
-JupyterLab's existing debugger panel rather than in dedicated rank tabs. Python's
-built-in `breakpoint()` remains disabled in distributed mode; use JupyterLab's
-gutter breakpoints instead.
+JupyterLab's existing debugger panel rather than in dedicated rank tabs.
+Python's built-in `breakpoint()` also works in notebook cells and imported
+libraries once the JupyterLab debugger is active. Without an attached debugger,
+it is ignored instead of starting competing `pdb` sessions.
 
 ## Computation model
 
