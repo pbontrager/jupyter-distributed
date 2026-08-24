@@ -1,0 +1,65 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "spmd-jupyter"
+version = "0.1.0"
+description = "A persistent multi-process SPMD kernel for JupyterLab"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [
+  { name = "SPMD Jupyter contributors" },
+]
+keywords = ["jupyter", "jupyterlab", "pytorch", "distributed", "spmd"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Framework :: Jupyter",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+  "ipykernel>=6.29",
+  "jupyter-client>=8.6",
+  "jupyter-server>=2.14",
+  "jupyterlab>=4.2",
+]
+
+[project.optional-dependencies]
+distributed = ["torch>=2.4"]
+
+[project.scripts]
+spmd-jupyter-install-kernelspec = "spmd_jupyter.kernelspec:main"
+
+[dependency-groups]
+dev = [
+  "build>=1.2",
+  "pytest>=8.2",
+  "pytest-asyncio>=0.23",
+  "ruff>=0.6",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["spmd_jupyter"]
+artifacts = ["spmd_jupyter/labextension/**"]
+
+[tool.hatch.build.targets.wheel.shared-data]
+"jupyter-config/jupyter_server_config.d/spmd_jupyter.json" = "etc/jupyter/jupyter_server_config.d/spmd_jupyter.json"
+"jupyter-config/kernels/spmd-python/kernel.json" = "share/jupyter/kernels/spmd-python/kernel.json"
+"spmd_jupyter/labextension" = "share/jupyter/labextensions/spmd-jupyter"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

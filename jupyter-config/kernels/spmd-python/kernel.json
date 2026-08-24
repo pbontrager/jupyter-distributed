@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "python",
+    "-m",
+    "spmd_jupyter.kernel",
+    "-f",
+    "{connection_file}"
+  ],
+  "display_name": "SPMD Python",
+  "language": "python",
+  "metadata": {
+    "debugger": true,
+    "spmd_jupyter": {
+      "world_size": 1
+    }
+  }
+}
