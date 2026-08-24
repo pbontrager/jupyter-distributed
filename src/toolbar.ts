@@ -58,7 +58,17 @@ class ProcessSelector extends Widget {
   }
 
   private _syncLocal(): void {
+    const isDistributed = this._isDistributedKernel();
+    this.setHidden(!isDistributed);
+    this._select.disabled = !isDistributed;
     this._select.value = String(this._state.get(this._sessionId()));
+  }
+
+  private _isDistributedKernel(): boolean {
+    return (
+      this._panel.sessionContext.session?.kernel?.name ===
+      'jupyter-distributed'
+    );
   }
 
   private _onKernelChanged = (): void => {
@@ -70,7 +80,7 @@ class ProcessSelector extends Widget {
     const kernel = this._panel.sessionContext.session?.kernel;
     const sessionId = this._sessionId();
     const request = ++this._syncRequest;
-    if (!kernel || !sessionId) {
+    if (!kernel || !sessionId || !this._isDistributedKernel()) {
       return;
     }
 
@@ -109,7 +119,7 @@ class ProcessSelector extends Widget {
     const next = Number(this._select.value);
     this._select.value = String(previous);
 
-    if (next === previous) {
+    if (!this._isDistributedKernel() || next === previous) {
       return;
     }
 
@@ -129,10 +139,10 @@ class ProcessSelector extends Widget {
     }
 
     const kernel = this._panel.sessionContext.session?.kernel;
-    if (!kernel) {
+    if (!kernel || kernel.name !== 'jupyter-distributed') {
       await showErrorMessage(
         'Unable to change process count',
-        'This notebook is not connected to a kernel.'
+        'This notebook is not connected to a Jupyter Distributed kernel.'
       );
       return;
     }
