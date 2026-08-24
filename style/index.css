@@ -1,0 +1,73 @@
+.jp-SpmdProcessSelector {
+  align-items: center;
+  display: flex;
+  gap: 4px;
+  padding: 0 4px;
+}
+
+.jp-SpmdProcessSelector-label {
+  color: var(--jp-ui-font-color1);
+  font-size: var(--jp-ui-font-size1);
+}
+
+.jp-SpmdProcessSelector-select {
+  background: var(--jp-layout-color1);
+  border: 1px solid var(--jp-border-color1);
+  border-radius: 2px;
+  color: var(--jp-ui-font-color1);
+  height: 24px;
+}
+
+.jp-SpmdRankOutput-tabs {
+  align-items: end;
+  border-bottom: 1px solid var(--jp-border-color2);
+  display: flex;
+  gap: 2px;
+  margin-bottom: 4px;
+}
+
+.jp-SpmdRankOutput-tab {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--jp-ui-font-color2);
+  cursor: pointer;
+  font: inherit;
+  padding: 3px 8px;
+}
+
+.jp-SpmdRankOutput-tab:hover,
+.jp-SpmdRankOutput-tab.jp-mod-selected {
+  background: var(--jp-layout-color2);
+  color: var(--jp-ui-font-color1);
+}
+
+.jp-SpmdRankOutput-tab.jp-mod-selected {
+  border-bottom-color: var(--jp-brand-color1);
+}
+
+.jp-SpmdRankOutput-tab.jp-mod-error {
+  color: var(--jp-error-color1);
+}
+
+.jp-SpmdRankOutput-tab.jp-mod-error.jp-mod-selected {
+  border-bottom-color: var(--jp-error-color1);
+}
+
+.jp-SpmdRankOutput-text {
+  box-sizing: border-box;
+  margin: 0;
+  overflow-x: auto;
+  padding: 2px 0;
+  white-space: pre-wrap;
+}
+
+.jp-SpmdRankOutput-stderr,
+.jp-SpmdRankOutput-error {
+  color: var(--jp-error-color1);
+}
+
+.jp-SpmdRankOutput-empty {
+  color: var(--jp-ui-font-color2);
+  font-style: italic;
+}
