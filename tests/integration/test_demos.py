@@ -71,7 +71,7 @@ def _convert_and_run(notebook: Path, tmp_path: Path) -> None:
         env=environment,
         capture_output=True,
         text=True,
-        timeout=1800,
+        timeout=600,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
