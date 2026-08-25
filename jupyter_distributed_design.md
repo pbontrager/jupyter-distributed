@@ -192,14 +192,15 @@ timeout.
 ## Current limitations
 
 - Local, single-machine process launch only.
-- JupyterLab 4 is the supported and tested frontend.
+- JupyterLab 4 and Jupyter Notebook 7 are supported; the debugger UI is
+  JupyterLab-only.
 - No elastic world-size changes.
 - No arbitrary rank-targeted execution mode.
 - No stdin routing in distributed mode.
 - Debugger integration is currently validated with Python/IPython and debugpy;
   other kernels require compatible Jupyter DAP behavior.
-- No bidirectional comm proxying, so `ipywidgets`, `tqdm.notebook`, and similar
-  widget protocols are not supported in distributed mode.
+- Comm-based widgets are routed by rank, including binary buffers and widget
+  state restoration after a frontend reconnect.
 - No automatic device assignment, collective initialization, sharding, or
   recovery of failed user process groups.
 - Output updates currently publish the accumulated rank snapshot; extremely
@@ -214,13 +215,14 @@ Portable CPU integration tests cover:
 - live streams and output-state updates;
 - rank-specific results and exceptions;
 - interrupt, restart, shutdown, and cleanup;
+- bidirectional rank-owned widget messages, binary buffers, and reconnect state;
 - two-rank breakpoints, stepping, stack and variable inspection, expression
   evaluation, and external-library `breakpoint()` calls;
 - a two-rank Gloo collective when PyTorch is installed.
 
-Release testing should additionally cover JupyterLab browser behavior and
-two-GPU NCCL workflows. Demo notebooks should be checked periodically because
-TorchTitan and Transformers distributed APIs evolve quickly.
+Release testing should additionally cover JupyterLab and Notebook 7 browser
+behavior and two-GPU NCCL workflows. Demo notebooks should be checked
+periodically because PyTorch and Transformers distributed APIs evolve quickly.
 
 ## Roadmap
 
@@ -233,8 +235,8 @@ TorchTitan and Transformers distributed APIs evolve quickly.
 - Improve rank startup, liveness, and partial-failure diagnostics.
 - Measure high-volume streaming behavior and replace full snapshots with an
   incremental protocol if needed.
-- Validate and maintain the TorchTitan and Transformers demos on supported GPU
-  configurations.
+- Validate and maintain the FSDP and tensor-parallel Transformers demos on
+  supported GPU configurations.
 - Prepare package publishing, compatibility policy, and release automation.
 
 ### Later
@@ -255,11 +257,10 @@ TorchTitan and Transformers distributed APIs evolve quickly.
 - Automatically selecting a parallelism strategy.
 - Automatically initializing or repairing user collectives.
 - Treating individual ranks as separate notebook sessions.
-- Bidirectional widget multiplexing unless a compelling SPMD use case emerges.
 
 ## Demos
 
-- [TorchTitan distributed training](demos/01_torchtitan_training.ipynb)
+- [FSDP training with Transformers](demos/01_fsdp_training.ipynb)
 - [Transformers tensor-parallel generation](demos/02_transformers_tp_generation.ipynb)
 
 The demos are integration examples, not dependencies of the core package.

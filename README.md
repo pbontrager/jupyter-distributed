@@ -175,7 +175,7 @@ the notebook's responsibility.
 
 ## Demos
 
-- [TorchTitan distributed training](demos/01_torchtitan_training.ipynb)
+- [FSDP training with Transformers](demos/01_fsdp_training.ipynb)
 - [Transformers tensor-parallel generation](demos/02_transformers_tp_generation.ipynb)
 
 The demos require their own model/runtime dependencies and suitable hardware.
