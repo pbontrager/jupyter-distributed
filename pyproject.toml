@@ -33,6 +33,7 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/pbontrager/jupyter-distributed"
 Issues = "https://github.com/pbontrager/jupyter-distributed/issues"
+Demos = "https://github.com/pbontrager/jupyter-distributed/tree/main/demos"
 
 [dependency-groups]
 dev = [
