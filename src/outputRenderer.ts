@@ -198,7 +198,10 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
     }
 
     const data = output.data ?? {};
-    const mimeType = this._rendermime.preferredMimeType(data, 'ensure');
+    const mimeType = this._rendermime.preferredMimeType(
+      data,
+      trusted ? 'any' : 'ensure'
+    );
     if (!mimeType) {
       parent.addWidget(
         Private.textWidget(
