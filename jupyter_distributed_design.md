@@ -260,7 +260,8 @@ periodically because PyTorch and Transformers distributed APIs evolve quickly.
 
 ## Demos
 
-- [FSDP training with Transformers](demos/01_fsdp_training.ipynb)
-- [Transformers tensor-parallel generation](demos/02_transformers_tp_generation.ipynb)
+- [FSDP training with Transformers](demos/fsdp_training.ipynb)
+- [Tensor-parallel chat with Transformers](demos/tp_chat.ipynb)
+- [Distributed debugging with PyTorch](demos/debugging.ipynb)
 
 The demos are integration examples, not dependencies of the core package.
