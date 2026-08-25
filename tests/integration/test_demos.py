@@ -89,7 +89,7 @@ def test_transformers_tp_api_matches_demo() -> None:
 
     assert is_accelerate_available()
     assert distributed_config.tp_size == 2
-    assert Qwen3Config().base_model_tp_plan
+    assert Qwen3Config().base_model_tp_plan["layers.*.self_attn.q_proj"] == "colwise"
 
 
 @pytest.mark.parametrize("name", CPU_DEMOS)
