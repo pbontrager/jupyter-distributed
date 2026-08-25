@@ -2,8 +2,8 @@
 
 Jupyter Distributed is a notebook extension for running each cell concurrently
 across multiple persistent kernel processes. It adds a **Processes** option to
-JupyterLab while letting you continue to select and customize your normal
-Jupyter kernels.
+JupyterLab and Jupyter Notebook 7 while letting you continue to select and
+customize your normal Jupyter kernels.
 
 This follows the single program, multiple data (SPMD) model: every process runs
 the same code but maintains its own independent state. In a notebook, that means
@@ -13,15 +13,17 @@ distributed training patterns found in ecosystems such as PyTorch and JAX.
 
 ## Installation
 
-Install Jupyter Distributed into the same environment as JupyterLab:
+Install Jupyter Distributed into the same environment as JupyterLab or Jupyter
+Notebook 7:
 
 ```bash
 pip install jupyter-distributed
 jupyter lab
 ```
 
-The Jupyter Server and JupyterLab extensions are enabled automatically. Restart
-JupyterLab after installing or upgrading the package.
+Use `jupyter notebook` instead of `jupyter lab` to launch Notebook 7. The
+Jupyter Server and frontend extensions are enabled automatically. Restart the
+server after installing or upgrading the package.
 
 ## Using it
 
@@ -42,7 +44,7 @@ updates are kept separate for each rank. Comm-based interactive outputs such as
 widget state and interactions are routed back to that rank. Widget state is
 restored when the browser reconnects to a still-running kernel.
 
-### Debugging Python
+### Debugging Python in JupyterLab
 
 The standard JupyterLab debugger works with distributed IPython kernels. A
 notebook breakpoint is installed in every process. Continue, pause, step over,
@@ -59,6 +61,9 @@ JupyterLab's existing debugger panel rather than in dedicated rank tabs.
 Python's built-in `breakpoint()` also works in notebook cells and imported
 libraries once the JupyterLab debugger is active. Without an attached debugger,
 it prints a warning instead of starting competing `pdb` sessions.
+
+Notebook 7 supports distributed execution and rank-aware output, but the
+debugger integration is currently available only in JupyterLab.
 
 ## Computation model
 
@@ -96,6 +101,7 @@ rank-aware output. It does not:
 - initialize collectives, shard data or models, or assign devices;
 - schedule work across multiple machines, clusters, Slurm, or Kubernetes;
 - provide elastic process resizing;
+- support Notebook 6 or the legacy classic Notebook frontend;
 - support interactive stdin prompts in distributed mode.
 
 The selected runtime remains responsible for communication between processes.

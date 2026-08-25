@@ -15,21 +15,14 @@ import {
 import { DebuggerRankSelector } from './debuggerRank';
 import { ProcessToolbarExtension } from './toolbar';
 
-const plugin: JupyterFrontEndPlugin<void> = {
-  id: 'jupyter-distributed:plugin',
+const notebookPlugin: JupyterFrontEndPlugin<void> = {
+  id: 'jupyter-distributed:notebook',
   description: 'Jupyter Distributed process controls and rank-aware output',
   autoStart: true,
-  requires: [
-    IRenderMimeRegistry,
-    IDebugger,
-    IDebuggerSidebar,
-    INotebookTracker
-  ],
+  requires: [IRenderMimeRegistry, INotebookTracker],
   activate: (
     app: JupyterFrontEnd,
     rendermime: IRenderMimeRegistry,
-    debuggerService: IDebugger,
-    debuggerSidebar: IDebugger.ISidebar,
     notebooks: INotebookTracker
   ): void => {
     const rankSelections = new RankSelectionModel();
@@ -56,7 +49,26 @@ const plugin: JupyterFrontEndPlugin<void> = {
     notebooks.widgetAdded.connect((_sender, panel) => {
       registerNotebookRenderer(panel);
     });
+  }
+};
 
+const debuggerPlugin: JupyterFrontEndPlugin<void> = {
+  id: 'jupyter-distributed:debugger',
+  description: 'Jupyter Distributed rank selection for the JupyterLab debugger',
+  autoStart: true,
+  optional: [IDebugger, IDebuggerSidebar],
+  activate: (
+    app: JupyterFrontEnd,
+    debuggerService: IDebugger | null,
+    debuggerSidebar: IDebugger.ISidebar | null
+  ): void => {
+    if (
+      app.name !== 'JupyterLab' ||
+      debuggerService === null ||
+      debuggerSidebar === null
+    ) {
+      return;
+    }
     debuggerSidebar.insertWidget(
       0,
       new DebuggerRankSelector(debuggerService)
@@ -64,7 +76,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
   }
 };
 
-export default plugin;
+export default [notebookPlugin, debuggerPlugin];
 
 namespace Private {
   export function rendererFactory(
