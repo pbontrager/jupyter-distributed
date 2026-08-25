@@ -399,6 +399,10 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
         assert live_reply["content"]["status"] == "ok"
         assert saw_live_output
 
+        reply, data = await execute_through_proxy(client, "silent_value = 123")
+        assert reply["status"] == "ok"
+        assert data is None
+
         reply, data = await execute_through_proxy(
             client,
             "import os; saved = int(os.environ['RANK']); (saved, int(os.environ['WORLD_SIZE']))",

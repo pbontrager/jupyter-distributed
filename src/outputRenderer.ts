@@ -81,6 +81,9 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
       );
       return;
     }
+    if (ranks.every(rank => rank.outputs.length === 0)) {
+      return;
+    }
 
     this._ranks = ranks.map(item => item.rank);
     this._executionId = Private.executionId(payload);

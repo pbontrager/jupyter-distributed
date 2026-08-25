@@ -58,13 +58,17 @@ class _LiveRankDisplay:
         self._flush_task: asyncio.Task[None] | None = None
         self._last_sent = 0.0
         self._dirty = False
-
-    def start(self) -> None:
-        self._send("display_data", self._live_payload())
+        self._started = False
 
     def update(self, rank: int, outputs: tuple[RankOutput, ...]) -> None:
         self._outputs[rank] = outputs
         self._dirty = True
+        if not self._started:
+            if not any(self._outputs.values()):
+                return
+            self._started = True
+            self._send("display_data", self._live_payload())
+            return
         if self._flush_task is not None:
             return
         loop = asyncio.get_running_loop()
@@ -76,9 +80,15 @@ class _LiveRankDisplay:
             self._flush_task.cancel()
             await asyncio.gather(self._flush_task, return_exceptions=True)
             self._flush_task = None
+        if not self._started and not any(result.outputs for result in execution.ranks):
+            return
         payload = execution.as_dict()
         payload["execution_id"] = self._execution_id
-        self._send("update_display_data", payload, execution=execution)
+        if self._started:
+            self._send("update_display_data", payload, execution=execution)
+        else:
+            self._started = True
+            self._send("display_data", payload, execution=execution)
 
     async def _flush_after(self, delay: float) -> None:
         if delay:
@@ -194,7 +204,6 @@ class SPMDKernel(Kernel):
                 self,
                 self.group.execution_count + (1 if store_history else 0),
             )
-            live_display.start()
         execution = await self.group.execute(
             code,
             silent=silent,
