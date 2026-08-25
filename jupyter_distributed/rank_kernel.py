@@ -40,6 +40,7 @@ class RankKernel:
         self.on_comm_event = on_comm_event
         self.manager = AsyncKernelManager(kernel_name=kernel_name)
         self.client: AsyncKernelClient | None = None
+        self._shell_lock = asyncio.Lock()
         self._iopub_queues: dict[str, asyncio.Queue[Mapping[str, Any]]] = {}
         self._iopub_task: asyncio.Task[None] | None = None
 
@@ -78,6 +79,24 @@ class RankKernel:
         store_history: bool = True,
         user_expressions: Mapping[str, Any] | None = None,
         on_output: OutputCallback | None = None,
+    ) -> RankExecution:
+        async with self._shell_lock:
+            return await self._execute_unlocked(
+                code,
+                silent=silent,
+                store_history=store_history,
+                user_expressions=user_expressions,
+                on_output=on_output,
+            )
+
+    async def _execute_unlocked(
+        self,
+        code: str,
+        *,
+        silent: bool,
+        store_history: bool,
+        user_expressions: Mapping[str, Any] | None,
+        on_output: OutputCallback | None,
     ) -> RankExecution:
         client = self._client()
         message_id = client.execute(
@@ -128,11 +147,12 @@ class RankKernel:
     async def request(self, message_type: str, *args: Any, **kwargs: Any) -> Mapping[str, Any]:
         """Send a simple shell request and return its matching content."""
 
-        client = self._client()
-        sender = getattr(client, message_type)
-        message_id = sender(*args, **kwargs)
-        reply = await self._shell_reply(message_id)
-        return reply.get("content", {})
+        async with self._shell_lock:
+            client = self._client()
+            sender = getattr(client, message_type)
+            message_id = sender(*args, **kwargs)
+            reply = await self._shell_reply(message_id)
+            return reply.get("content", {})
 
     async def debug_request(self, content: Mapping[str, Any]) -> Mapping[str, Any]:
         """Send one Jupyter debug request over the child control channel."""

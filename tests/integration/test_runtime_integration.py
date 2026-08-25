@@ -167,13 +167,15 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
         assert manager.kernel_name == "python3"
         await client.wait_for_ready(timeout=20)
 
-        info_id = client.kernel_info()
-        while True:
+        info_ids = {client.kernel_info() for _ in range(3)}
+        info_replies: dict[str, dict[str, Any]] = {}
+        while info_ids - info_replies.keys():
             info_reply = await client.get_shell_msg(timeout=5)
-            if info_reply.get("parent_header", {}).get("msg_id") == info_id:
-                break
-        assert info_reply["content"]["implementation"] == "ipython"
-        assert info_reply["content"]["debugger"] is True
+            message_id = info_reply.get("parent_header", {}).get("msg_id")
+            if message_id in info_ids:
+                info_replies[message_id] = info_reply["content"]
+        assert all(reply["implementation"] == "ipython" for reply in info_replies.values())
+        assert all(reply["debugger"] is True for reply in info_replies.values())
 
         initialized = await debug_through_proxy(
             client,
