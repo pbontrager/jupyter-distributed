@@ -80,6 +80,16 @@ def test_every_demo_is_exercised() -> None:
     assert {path.name for path in DEMOS.glob("*.ipynb")} == set(CPU_DEMOS + GPU_DEMOS)
 
 
+def test_transformers_tp_api_matches_demo() -> None:
+    from transformers import Qwen3Config
+    from transformers.distributed import DistributedConfig
+
+    distributed_config = DistributedConfig(tp_size=2)
+
+    assert distributed_config.tp_size == 2
+    assert Qwen3Config().base_model_tp_plan
+
+
 @pytest.mark.parametrize("name", CPU_DEMOS)
 def test_cpu_demo(name: str, tmp_path: Path) -> None:
     _convert_and_run(DEMOS / name, tmp_path)

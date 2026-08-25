@@ -48,7 +48,7 @@ dev = [
   "ruff>=0.6",
   "torch>=2.4",
   "tqdm>=4.66",
-  "transformers>=5",
+  "transformers>=5.15",
 ]
 
 [tool.hatch.build.targets.wheel]
