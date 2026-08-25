@@ -37,6 +37,7 @@ Demos = "https://github.com/pbontrager/jupyter-distributed/tree/main/demos"
 
 [dependency-groups]
 dev = [
+  "accelerate>=1.1",
   "build>=1.2",
   "datasets>=3",
   "ipywidgets>=8.1.9",

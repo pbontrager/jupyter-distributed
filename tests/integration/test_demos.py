@@ -83,9 +83,11 @@ def test_every_demo_is_exercised() -> None:
 def test_transformers_tp_api_matches_demo() -> None:
     from transformers import Qwen3Config
     from transformers.distributed import DistributedConfig
+    from transformers.utils import is_accelerate_available
 
     distributed_config = DistributedConfig(tp_size=2)
 
+    assert is_accelerate_available()
     assert distributed_config.tp_size == 2
     assert Qwen3Config().base_model_tp_plan
 
