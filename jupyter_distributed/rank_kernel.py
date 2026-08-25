@@ -15,6 +15,7 @@ from .protocol import RankExecution, RankOutput
 _OUTPUT_TYPES = {"stream", "display_data", "execute_result", "error"}
 OutputCallback = Callable[[int, tuple[RankOutput, ...]], Awaitable[None] | None]
 DebugEventCallback = Callable[[int, Mapping[str, Any]], Awaitable[None] | None]
+CommEventCallback = Callable[[int, Mapping[str, Any]], Awaitable[None] | None]
 
 
 class RankKernel:
@@ -29,12 +30,14 @@ class RankKernel:
         cwd: str | None = None,
         ready_timeout: float = 30.0,
         on_debug_event: DebugEventCallback | None = None,
+        on_comm_event: CommEventCallback | None = None,
     ) -> None:
         self.rank = rank
         self.env = dict(env)
         self.cwd = cwd
         self.ready_timeout = ready_timeout
         self.on_debug_event = on_debug_event
+        self.on_comm_event = on_comm_event
         self.manager = AsyncKernelManager(kernel_name=kernel_name)
         self.client: AsyncKernelClient | None = None
         self._iopub_queues: dict[str, asyncio.Queue[Mapping[str, Any]]] = {}
@@ -143,6 +146,32 @@ class RankKernel:
             if reply.get("parent_header", {}).get("msg_id") == message_id:
                 return reply.get("content", {})
 
+    def send_comm(
+        self,
+        message_type: str,
+        content: Mapping[str, Any],
+        *,
+        metadata: Mapping[str, Any] | None = None,
+        buffers: list[Any] | None = None,
+        parent: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Send an opaque comm message to this child's shell channel."""
+
+        client = self._client()
+        source = dict(parent or {})
+        header = dict(source.get("header", {}))
+        if not header:
+            header = dict(client.session.msg(message_type)["header"])
+        header["msg_type"] = message_type
+        message = {
+            "header": header,
+            "parent_header": dict(source.get("parent_header", {})),
+            "metadata": dict(metadata or {}),
+            "content": dict(content),
+        }
+        message["buffers"] = list(buffers or [])
+        client.shell_channel.send(message)
+
     async def _shell_reply(self, message_id: str) -> Mapping[str, Any]:
         client = self._client()
         while True:
@@ -182,6 +211,12 @@ class RankKernel:
             if message.get("msg_type") == "debug_event":
                 if self.on_debug_event is not None:
                     notified = self.on_debug_event(self.rank, message.get("content", {}))
+                    if inspect.isawaitable(notified):
+                        await notified
+                continue
+            if message.get("msg_type") in {"comm_open", "comm_msg", "comm_close"}:
+                if self.on_comm_event is not None:
+                    notified = self.on_comm_event(self.rank, message)
                     if inspect.isawaitable(notified):
                         await notified
                 continue

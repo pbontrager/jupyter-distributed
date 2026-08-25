@@ -37,7 +37,10 @@ group at the requested size, and clears all in-memory state.
 
 Outputs stream while a cell is running. Standard streams, rich display data,
 display updates, output clearing, exceptions, and terminal-style progress
-updates are kept separate for each rank.
+updates are kept separate for each rank. Comm-based interactive outputs such as
+`ipywidgets` and `tqdm.notebook` also remain independent: each rank owns its
+widget state and interactions are routed back to that rank. Widget state is
+restored when the browser reconnects to a still-running kernel.
 
 ### Debugging Python
 
@@ -93,8 +96,7 @@ rank-aware output. It does not:
 - initialize collectives, shard data or models, or assign devices;
 - schedule work across multiple machines, clusters, Slurm, or Kubernetes;
 - provide elastic process resizing;
-- support stdin or comm-based widgets such as `ipywidgets` and `tqdm.notebook`
-  in distributed mode.
+- support interactive stdin prompts in distributed mode.
 
 The selected runtime remains responsible for communication between processes.
 The execution protocol is designed to support any kernelspec, but the current

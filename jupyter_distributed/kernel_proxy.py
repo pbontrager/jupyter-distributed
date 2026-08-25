@@ -14,6 +14,7 @@ from uuid import uuid4
 from ipykernel.kernelapp import IPKernelApp
 from ipykernel.kernelbase import Kernel
 
+from .comms import DistributedCommRouter
 from .debugger import DistributedDebugger
 from .kernel_group import DistributedKernelGroup
 from .protocol import GroupExecution, RankOutput
@@ -165,13 +166,22 @@ class SPMDKernel(Kernel):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._debugger = DistributedDebugger(self)
+        self._comms = DistributedCommRouter(self)
         self.group = DistributedKernelGroup(
             int(os.environ.get("JUPYTER_DISTRIBUTED_WORLD_SIZE", "1")),
             kernel_name=os.environ.get("JUPYTER_DISTRIBUTED_BASE_KERNEL", "python3"),
             cwd=os.environ.get("JUPYTER_DISTRIBUTED_CWD") or None,
             on_debug_event=self._debugger.handle_event,
+            on_comm_event=self._comms.handle_rank,
         )
         self._execution_loop: asyncio.AbstractEventLoop | None = None
+        self.shell_handlers.update(
+            {
+                "comm_open": self.comm_open,
+                "comm_msg": self.comm_msg,
+                "comm_close": self.comm_close,
+            }
+        )
 
     def _handle_sigint(self, _signum: int, _frame: object) -> None:
         """Forward the ordinary Jupyter kernel interrupt to every child rank."""
@@ -267,8 +277,34 @@ class SPMDKernel(Kernel):
         await self._ensure_started()
         return await self._debugger.request(msg)
 
+    async def comm_open(self, stream: Any, ident: Any, parent: Mapping[str, Any]) -> None:
+        await self._ensure_started()
+        await self._comms.handle_frontend("comm_open", parent)
+
+    async def comm_msg(self, stream: Any, ident: Any, parent: Mapping[str, Any]) -> None:
+        await self._ensure_started()
+        await self._comms.handle_frontend("comm_msg", parent)
+
+    async def comm_close(self, stream: Any, ident: Any, parent: Mapping[str, Any]) -> None:
+        await self._ensure_started()
+        await self._comms.handle_frontend("comm_close", parent)
+
+    async def comm_info_request(self, stream: Any, ident: Any, parent: Mapping[str, Any]) -> None:
+        """Report comms across every rank so frontend state can reconnect."""
+
+        if self.session is None:
+            return
+        await self._ensure_started()
+        target_name = parent.get("content", {}).get("target_name")
+        content = {
+            "status": "ok",
+            "comms": self._comms.comm_info(str(target_name) if target_name is not None else None),
+        }
+        self.session.send(stream, "comm_info_reply", content, parent, ident)
+
     async def do_shutdown(self, restart: bool) -> dict[str, Any]:
         await self.group.shutdown(now=True)
+        self._comms.reset()
         return {"status": "ok", "restart": restart}
 
     async def interrupt_group(self) -> None:

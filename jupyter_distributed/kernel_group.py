@@ -5,11 +5,11 @@ from __future__ import annotations
 import asyncio
 import os
 import socket
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
 from .protocol import GroupExecution, GroupStatus
-from .rank_kernel import DebugEventCallback, OutputCallback, RankKernel
+from .rank_kernel import CommEventCallback, DebugEventCallback, OutputCallback, RankKernel
 
 
 def _free_port(host: str) -> int:
@@ -32,6 +32,7 @@ class DistributedKernelGroup:
         env: Mapping[str, str] | None = None,
         cwd: str | None = None,
         on_debug_event: DebugEventCallback | None = None,
+        on_comm_event: CommEventCallback | None = None,
     ) -> None:
         if world_size < 1:
             raise ValueError("world_size must be at least 1")
@@ -42,6 +43,7 @@ class DistributedKernelGroup:
         self.base_env = {**os.environ, **(env or {})}
         self.cwd = cwd
         self.on_debug_event = on_debug_event
+        self.on_comm_event = on_comm_event
         self._ranks: list[RankKernel] = []
         self._state: Literal["stopped", "starting", "idle", "busy", "restarting"] = "stopped"
         self._execution_count = 0
@@ -68,6 +70,7 @@ class DistributedKernelGroup:
                 kernel_name=self.kernel_name,
                 cwd=self.cwd,
                 on_debug_event=self.on_debug_event,
+                on_comm_event=self.on_comm_event,
             )
             for rank in range(self.world_size)
         ]
@@ -142,6 +145,31 @@ class DistributedKernelGroup:
             *(ranks[rank].debug_request(content) for rank, content in requested)
         )
         return {rank: reply for (rank, _content), reply in zip(requested, replies, strict=True)}
+
+    async def send_comm(
+        self,
+        ranks: Sequence[int],
+        message_type: str,
+        content: Mapping[str, Any],
+        *,
+        metadata: Mapping[str, Any] | None = None,
+        buffers: list[Any] | None = None,
+        parent: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Send one opaque comm message to selected child kernels."""
+
+        self._require_started()
+        rank_kernels = {rank.rank: rank for rank in self._ranks}
+        for rank in ranks:
+            child = rank_kernels.get(rank)
+            if child is not None:
+                child.send_comm(
+                    message_type,
+                    content,
+                    metadata=metadata,
+                    buffers=buffers,
+                    parent=parent,
+                )
 
     async def interrupt(self) -> None:
         await asyncio.gather(*(rank.interrupt() for rank in self._ranks), return_exceptions=True)

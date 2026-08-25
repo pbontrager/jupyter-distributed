@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from jupyter_client import AsyncKernelManager
@@ -111,6 +112,26 @@ async def debug_through_proxy(
         reply = await client.get_control_msg(timeout=30)
         if reply.get("parent_header", {}).get("msg_id") == message_id:
             return reply["content"]
+
+
+async def shell_reply(client: AsyncKernelClient, message_id: str) -> dict[str, Any]:
+    while True:
+        reply = await client.get_shell_msg(timeout=10)
+        if reply.get("parent_header", {}).get("msg_id") == message_id:
+            return reply["content"]
+
+
+async def iopub_message(
+    client: AsyncKernelClient,
+    message_type: str,
+    predicate: Any = None,
+) -> dict[str, Any]:
+    while True:
+        message = await client.get_iopub_msg(timeout=20)
+        if message.get("msg_type") != message_type:
+            continue
+        if predicate is None or predicate(message):
+            return message
 
 
 @pytest.mark.asyncio
@@ -457,6 +478,196 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
         reply, data = await execute_through_proxy(client, "1 + 1")
         assert reply["status"] == "ok"
         assert data is None
+    finally:
+        client.stop_channels()
+        await manager.shutdown_kernel(now=False)
+
+
+@pytest.mark.asyncio
+async def test_widgets_route_by_rank_and_restore_state_with_binary_buffers() -> None:
+    pytest.importorskip("ipywidgets")
+    manager = AsyncKernelManager(kernel_name="python3")
+    await manager.start_kernel(cwd=str(Path.cwd()))
+
+    class SingleKernelManager:
+        def get_kernel(self, kernel_id: str) -> AsyncKernelManager:
+            assert kernel_id == "widget-kernel"
+            return manager
+
+        async def restart_kernel(self, kernel_id: str) -> None:
+            assert kernel_id == "widget-kernel"
+            await manager.restart_kernel(now=False)
+
+    coordinator = DistributedKernelCoordinator(SingleKernelManager())
+    client = manager.client()
+    client.start_channels()
+    try:
+        await client.wait_for_ready(timeout=20)
+        await coordinator.set_world_size("widget-kernel", 2)
+        await client.wait_for_ready(timeout=20)
+
+        execute_id = client.execute(
+            "import ipywidgets as widgets, os\n"
+            "from IPython.display import display\n"
+            "widget_rank = int(os.environ['RANK'])\n"
+            "slider = widgets.IntSlider(value=widget_rank)\n"
+            "image = widgets.Image(value=bytes([widget_rank, 17, 23]))\n"
+            "display(slider)"
+        )
+        comm_opens: dict[str, dict[str, Any]] = {}
+        rank_data = None
+        while True:
+            message = await client.get_iopub_msg(timeout=20)
+            if message["msg_type"] == "comm_open":
+                comm_opens[message["content"]["comm_id"]] = message
+            if message.get("parent_header", {}).get("msg_id") == execute_id and message[
+                "msg_type"
+            ] in {"display_data", "update_display_data"}:
+                rank_data = message["content"]["data"]
+            if (
+                message.get("parent_header", {}).get("msg_id") == execute_id
+                and message["msg_type"] == "status"
+                and message["content"]["execution_state"] == "idle"
+            ):
+                break
+        assert (await shell_reply(client, execute_id))["status"] == "ok"
+        assert rank_data is not None
+
+        slider_ids = [
+            rank["outputs"][-1]["content"]["data"]["application/vnd.jupyter.widget-view+json"][
+                "model_id"
+            ]
+            for rank in rank_data[RANK_MIME]["ranks"]
+        ]
+        assert len(set(slider_ids)) == 2
+        assert all(model_id in comm_opens for model_id in slider_ids)
+        image_opens = [
+            message
+            for message in comm_opens.values()
+            if message["content"]["data"]["state"].get("_model_name") == "ImageModel"
+        ]
+        assert len(image_opens) == 2
+        assert all(len(message.get("buffers", [])) == 1 for message in image_opens)
+        image_ids = {
+            bytes(message["buffers"][0])[0]: message["content"]["comm_id"]
+            for message in image_opens
+        }
+
+        delayed_id = client.execute(
+            "import threading\n"
+            "if widget_rank == 0:\n"
+            "    threading.Timer(0.5, lambda: setattr(slider, 'value', 7)).start()"
+        )
+        while True:
+            message = await client.get_iopub_msg(timeout=20)
+            if (
+                message.get("parent_header", {}).get("msg_id") == delayed_id
+                and message["msg_type"] == "status"
+                and message["content"]["execution_state"] == "idle"
+            ):
+                break
+        assert (await shell_reply(client, delayed_id))["status"] == "ok"
+        delayed_update = await iopub_message(
+            client,
+            "comm_msg",
+            lambda message: (
+                message["content"].get("comm_id") == slider_ids[0]
+                and message["content"].get("data", {}).get("state", {}).get("value") == 7
+            ),
+        )
+        assert delayed_update["content"]["data"]["method"] == "update"
+
+        update = client.session.msg(
+            "comm_msg",
+            content={
+                "comm_id": slider_ids[1],
+                "data": {
+                    "method": "update",
+                    "state": {"value": 42},
+                    "buffer_paths": [],
+                },
+            },
+        )
+        client.shell_channel.send(update)
+        image_update = client.session.msg(
+            "comm_msg",
+            content={
+                "comm_id": image_ids[1],
+                "data": {
+                    "method": "update",
+                    "state": {},
+                    "buffer_paths": [["value"]],
+                },
+            },
+        )
+        image_update["buffers"] = [memoryview(b"updated")]
+        client.shell_channel.send(image_update)
+        await asyncio.sleep(0.2)
+        reply, data = await execute_through_proxy(client, "slider.value, bytes(image.value)")
+        assert reply["status"] == "ok"
+        assert [
+            rank["outputs"][-1]["content"]["data"]["text/plain"]
+            for rank in data[RANK_MIME]["ranks"]
+        ] == ["(7, b'\\x00\\x11\\x17')", "(42, b'updated')"]
+
+        info_id = client.comm_info(target_name="jupyter.widget")
+        info = await shell_reply(client, info_id)
+        assert set(slider_ids).issubset(info["comms"])
+
+        client.stop_channels()
+        client = manager.client()
+        client.start_channels()
+        await client.wait_for_ready(timeout=20)
+
+        control_id = uuid4().hex
+        control_open = client.session.msg(
+            "comm_open",
+            content={
+                "comm_id": control_id,
+                "target_name": "jupyter.widget.control",
+                "data": {},
+            },
+            metadata={"version": "1.0.0"},
+        )
+        client.shell_channel.send(control_open)
+        control_request = client.session.msg(
+            "comm_msg",
+            content={"comm_id": control_id, "data": {"method": "request_states"}},
+            metadata={"version": "1.0.0"},
+        )
+        client.shell_channel.send(control_request)
+        restored = await iopub_message(
+            client,
+            "comm_msg",
+            lambda message: (
+                message["content"].get("comm_id") == control_id
+                and message["content"].get("data", {}).get("method") == "update_states"
+            ),
+        )
+        states = restored["content"]["data"]["states"]
+        assert set(slider_ids).issubset(states)
+        assert len(restored["content"]["data"]["buffer_paths"]) == 2
+        assert [bytes(buffer) for buffer in restored.get("buffers", [])] == [
+            bytes([0, 17, 23]),
+            b"updated",
+        ]
+
+        state_request = client.session.msg(
+            "comm_msg",
+            content={
+                "comm_id": slider_ids[1],
+                "data": {"method": "request_state"},
+            },
+        )
+        state_request_id = state_request["header"]["msg_id"]
+        client.shell_channel.send(state_request)
+        state_reply = await iopub_message(
+            client,
+            "comm_msg",
+            lambda message: message.get("parent_header", {}).get("msg_id") == state_request_id,
+        )
+        assert state_reply["content"]["comm_id"] == slider_ids[1]
+        assert state_reply["content"]["data"]["state"]["value"] == 42
     finally:
         client.stop_channels()
         await manager.shutdown_kernel(now=False)
