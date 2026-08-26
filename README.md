@@ -11,6 +11,8 @@ one cell can update several parallel interactive sessions whose variables remain
 available in later cells. The model is general, while naturally supporting
 distributed training patterns found in ecosystems such as PyTorch and JAX.
 
+![Tensor-parallel generation across eight notebook processes](https://raw.githubusercontent.com/pbontrager/jupyter-distributed/main/tp-chat-generation.png)
+
 ## Installation
 
 Install Jupyter Distributed into the same environment as JupyterLab or Jupyter
