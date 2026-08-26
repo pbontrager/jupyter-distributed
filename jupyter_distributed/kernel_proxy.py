@@ -18,6 +18,7 @@ from .comms import DistributedCommRouter
 from .debugger import DistributedDebugger
 from .kernel_group import DistributedKernelGroup
 from .protocol import GroupExecution, RankOutput
+from .rank_magic import RankMagicError, parse_rank_cell
 
 RANK_MIME = "application/vnd.jupyter-distributed.rank+json"
 _STREAM_UPDATE_INTERVAL = 0.05
@@ -208,6 +209,18 @@ class SPMDKernel(Kernel):
     ) -> dict[str, Any]:
         self._execution_loop = asyncio.get_running_loop()
         await self._ensure_started()
+        try:
+            rank_cell = parse_rank_cell(code)
+        except RankMagicError as error:
+            return self._error("RankMagicError", str(error), self.group.execution_count)
+        target_rank = rank_cell.rank if rank_cell is not None else None
+        if target_rank is not None and target_rank >= self.group.world_size:
+            return self._error(
+                "RankMagicError",
+                f"rank must be between 0 and {self.group.world_size - 1}, got {target_rank}",
+                self.group.execution_count,
+            )
+        executed_code = rank_cell.code if rank_cell is not None else code
         live_display = None
         if not silent:
             live_display = _LiveRankDisplay(
@@ -215,20 +228,24 @@ class SPMDKernel(Kernel):
                 self.group.execution_count + (1 if store_history else 0),
             )
         execution = await self.group.execute(
-            code,
+            executed_code,
             silent=silent,
             store_history=store_history,
             user_expressions=user_expressions,
             on_output=live_display.update if live_display is not None else None,
+            target_rank=target_rank,
         )
         if live_display is not None:
             await live_display.finish(execution)
         if execution.status == "ok":
+            reply_rank = target_rank if target_rank is not None else 0
             return {
                 "status": "ok",
                 "execution_count": execution.execution_count,
                 "payload": [],
-                "user_expressions": dict(execution.ranks[0].reply.get("user_expressions", {})),
+                "user_expressions": dict(
+                    execution.ranks[reply_rank].reply.get("user_expressions", {})
+                ),
             }
         failed = next(result for result in execution.ranks if result.status != "ok")
         return self._error(

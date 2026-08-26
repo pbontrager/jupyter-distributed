@@ -39,6 +39,25 @@ server after installing or upgrading the package.
 Changing the process count stops the current kernel processes, starts a new
 group at the requested size, and clears all in-memory state.
 
+With **Processes** greater than `1`, run a cell on only one zero-based rank by
+starting it with `%%rank N`. The wrapper can contain ordinary code or another
+cell magic:
+
+```python
+%%rank 1
+activation.max().item()
+```
+
+```python
+%%rank 0
+%%ai
+Explain the model defined in this notebook.
+```
+
+Only the selected rank runs the cell body or changes state. This is useful for
+rank-local inspection and for operations such as `%%ai` that should run once
+rather than independently on every process.
+
 Outputs stream while a cell is running. Standard streams, rich display data,
 display updates, output clearing, exceptions, and terminal-style progress
 updates are kept separate for each rank. Comm-based interactive outputs such as

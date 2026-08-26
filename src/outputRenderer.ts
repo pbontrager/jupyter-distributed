@@ -39,8 +39,15 @@ export class RankSelectionModel {
     return executionId ? (this._values.get(executionId) ?? 0) : 0;
   }
 
+  has(executionId: string | null): boolean {
+    return executionId !== null && this._values.has(executionId);
+  }
+
   set(executionId: string | null, rank: number): void {
-    if (!executionId || this.get(executionId) === rank) {
+    if (
+      !executionId ||
+      (this._values.has(executionId) && this.get(executionId) === rank)
+    ) {
       return;
     }
     this._values.set(executionId, rank);
@@ -87,9 +94,10 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
 
     this._ranks = ranks.map(item => item.rank);
     this._executionId = Private.executionId(payload);
-    const remembered = this._executionId
+    const firstOutputRank = ranks.find(rank => rank.outputs.length > 0)?.rank;
+    const remembered = this._selections.has(this._executionId)
       ? this._selections.get(this._executionId)
-      : this._selectedRank;
+      : (firstOutputRank ?? this._selectedRank);
     this._selectedRank = this._ranks.includes(remembered)
       ? remembered
       : this._ranks[0];

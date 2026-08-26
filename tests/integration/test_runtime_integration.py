@@ -443,6 +443,53 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
         ]
         assert values == ["10", "11"]
 
+        reply, data = await execute_through_proxy(
+            client,
+            "%%rank 1\nrank_only = saved + 100\nrank_only",
+        )
+        assert reply["status"] == "ok"
+        assert data is not None
+        assert data[RANK_MIME]["ranks"][0]["outputs"] == []
+        assert data[RANK_MIME]["ranks"][1]["outputs"][-1]["content"]["data"][
+            "text/plain"
+        ] == "101"
+
+        reply, data = await execute_through_proxy(
+            client,
+            "('rank_only' in globals(), len(In))",
+        )
+        assert reply["status"] == "ok"
+        assert data is not None
+        values = [
+            rank["outputs"][-1]["content"]["data"]["text/plain"]
+            for rank in data[RANK_MIME]["ranks"]
+        ]
+        assert values[0].startswith("(False, ")
+        assert values[1].startswith("(True, ")
+        assert values[0].split(", ", 1)[1] == values[1].split(", ", 1)[1]
+
+        reply, data = await execute_through_proxy(
+            client,
+            "%%rank 0\n%%capture rank_capture\nprint('captured on rank zero')",
+        )
+        assert reply["status"] == "ok"
+        assert data is None
+        reply, data = await execute_through_proxy(
+            client,
+            "rank_capture.stdout if 'rank_capture' in globals() else None",
+        )
+        assert reply["status"] == "ok"
+        assert data is not None
+        assert data[RANK_MIME]["ranks"][0]["outputs"][-1]["content"]["data"][
+            "text/plain"
+        ] == "'captured on rank zero\\n'"
+        assert data[RANK_MIME]["ranks"][1]["outputs"] == []
+
+        reply, data = await execute_through_proxy(client, "%%rank 2\nvalue = 1")
+        assert reply["status"] == "error"
+        assert reply["ename"] == "RankMagicError"
+        assert data is None
+
         message_id = client.execute("import time; time.sleep(60)")
         while True:
             message = await client.get_iopub_msg(timeout=10)

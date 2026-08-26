@@ -25,8 +25,9 @@ async def get_distributed_notebook_info(notebook_path: str | None = None) -> dic
     The selected kernel may run as N persistent kernels using SPMD: every code
     cell runs on every rank with independent rank-local state. This tool reports
     N. Use read_distributed_cell_outputs to inspect every rank without switching
-    output tabs. While debugging in JupyterLab, use select_distributed_debug_rank
-    to choose the rank shown by Variables, Call Stack, and the Debug Console.
+    output tabs. Start a cell with %%rank N to run analysis code only on rank N.
+    While debugging in JupyterLab, use select_distributed_debug_rank to choose
+    the rank shown by Variables, Call Stack, and the Debug Console.
     """
     path = await _notebook_path(notebook_path)
     server = _server_app()

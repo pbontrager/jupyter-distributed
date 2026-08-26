@@ -94,9 +94,16 @@ class DistributedKernelGroup:
         store_history: bool = True,
         user_expressions: Mapping[str, Any] | None = None,
         on_output: OutputCallback | None = None,
+        target_rank: int | None = None,
     ) -> GroupExecution:
         async with self._execution_lock:
             self._require_started()
+            if target_rank is not None and (
+                isinstance(target_rank, bool) or not 0 <= target_rank < self.world_size
+            ):
+                raise ValueError(
+                    f"rank must be between 0 and {self.world_size - 1}, got {target_rank}"
+                )
             self._state = "busy"
             if store_history:
                 self._execution_count += 1
@@ -104,11 +111,19 @@ class DistributedKernelGroup:
                 results = await asyncio.gather(
                     *(
                         rank.execute(
-                            code,
+                            code if target_rank is None or rank.rank == target_rank else "pass",
                             silent=silent,
                             store_history=store_history,
-                            user_expressions=user_expressions,
-                            on_output=on_output,
+                            user_expressions=(
+                                user_expressions
+                                if target_rank is None or rank.rank == target_rank
+                                else None
+                            ),
+                            on_output=(
+                                on_output
+                                if target_rank is None or rank.rank == target_rank
+                                else None
+                            ),
                         )
                         for rank in self._ranks
                     )

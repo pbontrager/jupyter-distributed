@@ -21,12 +21,14 @@ class FakeRankKernel:
         self.stopped = False
         self.interrupted = False
         self.gate: asyncio.Event | None = None
+        self.executions: list[tuple[str, dict[str, Any]]] = []
         self.instances.append(self)
 
     async def start(self) -> None:
         self.started = True
 
     async def execute(self, code: str, **kwargs: Any) -> RankExecution:
+        self.executions.append((code, kwargs))
         if self.gate is not None:
             await self.gate.wait()
         return RankExecution(self.rank, "ok")
@@ -90,6 +92,39 @@ async def test_execute_fans_out_concurrently() -> None:
     assert execution.execution_count == 1
     assert [result.rank for result in execution.ranks] == [0, 1]
     assert (await group.status()).state == "idle"
+
+
+@pytest.mark.asyncio
+async def test_execute_can_target_one_rank_and_keep_other_histories_aligned() -> None:
+    group = DistributedKernelGroup(3)
+    await group.start()
+
+    execution = await group.execute(
+        "inspect_rank()",
+        user_expressions={"value": "value"},
+        target_rank=1,
+    )
+
+    assert execution.execution_count == 1
+    assert [rank.executions[0][0] for rank in group.ranks] == [
+        "pass",
+        "inspect_rank()",
+        "pass",
+    ]
+    assert group.ranks[0].executions[0][1]["store_history"] is True
+    assert group.ranks[1].executions[0][1]["user_expressions"] == {"value": "value"}
+    assert group.ranks[2].executions[0][1]["user_expressions"] is None
+
+
+@pytest.mark.asyncio
+async def test_execute_rejects_unknown_target_rank() -> None:
+    group = DistributedKernelGroup(2)
+    await group.start()
+
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        await group.execute("work()", target_rank=2)
+
+    assert all(not rank.executions for rank in group.ranks)
 
 
 def test_output_buffer_applies_stream_display_and_clear_updates() -> None:
