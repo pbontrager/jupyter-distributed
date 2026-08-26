@@ -13,7 +13,7 @@ For frontend changes, also install the JavaScript dependencies:
 
 ```bash
 uv run --with nodeenv python -m nodeenv --node=20.19.0 .nodeenv
-PATH="$PWD/.nodeenv/bin:$PATH" uv run jlpm install --frozen-lockfile
+PATH="$PWD/.nodeenv/bin:$PATH" corepack yarn install --frozen-lockfile
 ```
 
 Launch the development environment with `uv run jupyter lab`.
@@ -24,7 +24,9 @@ Launch the development environment with `uv run jupyter lab`.
 uv run ruff format --check .
 uv run ruff check .
 uv run pytest
-PATH="$PWD/.nodeenv/bin:$PATH" uv run jlpm build
+PATH="$PWD/.nodeenv/bin:$PATH" npm run build:lib
+JUPYTERLAB_CORE="$(uv run python -c 'import pathlib, jupyterlab; print(pathlib.Path(jupyterlab.__file__).parent / "staging")')"
+PATH="$PWD/.nodeenv/bin:$PATH" npx --no-install build-labextension . --core-path "$JUPYTERLAB_CORE"
 ```
 
 GPU demos run when at least two CUDA devices are available and otherwise skip.
