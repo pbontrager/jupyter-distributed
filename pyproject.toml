@@ -35,6 +35,9 @@ Homepage = "https://github.com/pbontrager/jupyter-distributed"
 Issues = "https://github.com/pbontrager/jupyter-distributed/issues"
 Demos = "https://github.com/pbontrager/jupyter-distributed/tree/main/demos"
 
+[project.entry-points."jupyter_server_mcp.tools"]
+jupyter_distributed = "jupyter_distributed.mcp:TOOLS"
+
 [dependency-groups]
 dev = [
   "accelerate>=1.1",

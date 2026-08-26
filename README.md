@@ -67,6 +67,13 @@ it prints a warning instead of starting competing `pdb` sessions.
 Notebook 7 supports distributed execution and rank-aware output, but the
 debugger integration is currently available only in JupyterLab.
 
+### Jupyter AI
+
+When Jupyter AI is installed in the same server environment, Jupyter
+Distributed automatically adds MCP tools that let an agent check the live
+process count, read every rank's output, and select the rank shown in the
+JupyterLab debugger. No additional configuration is required.
+
 ## Computation model
 
 Jupyter Distributed follows the single program, multiple data (SPMD) model:

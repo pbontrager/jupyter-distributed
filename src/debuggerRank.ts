@@ -31,6 +31,36 @@ export class DebuggerRankSelector extends Widget {
     super.dispose();
   }
 
+  async selectRank(rank: number): Promise<{
+    rank: number;
+    availableRanks: number[];
+  }> {
+    if (!Number.isSafeInteger(rank) || rank < 0) {
+      throw new Error('Rank must be a non-negative integer.');
+    }
+    if (!this._debugger.session?.isStarted) {
+      throw new Error('Start a JupyterLab debugging session before selecting a rank.');
+    }
+    if (!this._threads.has(rank)) {
+      await this._refresh();
+    }
+    if (!this._threads.has(rank)) {
+      const available = [...this._threads.keys()].sort((a, b) => a - b);
+      throw new Error(
+        available.length > 0
+          ? `Rank ${rank} is not stopped. Available ranks: ${available.join(', ')}.`
+          : 'No distributed ranks are currently stopped.'
+      );
+    }
+    if (!(await this._showRank(rank))) {
+      throw new Error(`Unable to select stopped rank ${rank}.`);
+    }
+    return {
+      rank: this._selectedRank,
+      availableRanks: [...this._threads.keys()].sort((a, b) => a - b)
+    };
+  }
+
   private _onSessionChanged = (): void => {
     this._request += 1;
     this._threads.clear();
@@ -99,11 +129,14 @@ export class DebuggerRankSelector extends Widget {
     }
   }
 
-  private async _showRank(rank: number, request = ++this._request): Promise<void> {
+  private async _showRank(
+    rank: number,
+    request = ++this._request
+  ): Promise<boolean> {
     const session = this._debugger.session;
     const threadId = this._threads.get(rank);
     if (!session?.isStarted || threadId === undefined) {
-      return;
+      return false;
     }
 
     this._select.disabled = true;
@@ -114,16 +147,18 @@ export class DebuggerRankSelector extends Widget {
         session !== this._debugger.session ||
         !reply.success
       ) {
-        return;
+        return false;
       }
       this._selectedRank = rank;
       this._select.value = String(rank);
       this._debugger.model.stoppedThreads = new Set([threadId]);
       this._debugger.model.callstack.frames = reply.body.stackFrames;
+      return true;
     } catch (error) {
       if (request === this._request) {
         console.warn(`Unable to inspect distributed rank ${rank}`, error);
       }
+      return false;
     } finally {
       if (request === this._request) {
         this._select.disabled = false;

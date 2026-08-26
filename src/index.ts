@@ -69,10 +69,26 @@ const debuggerPlugin: JupyterFrontEndPlugin<void> = {
     ) {
       return;
     }
-    debuggerSidebar.insertWidget(
-      0,
-      new DebuggerRankSelector(debuggerService)
-    );
+    const rankSelector = new DebuggerRankSelector(debuggerService);
+    debuggerSidebar.insertWidget(0, rankSelector);
+    app.commands.addCommand('jupyter-distributed:select-debug-rank', {
+      label: 'Select Distributed Debugger Rank',
+      caption: 'Select which stopped rank supplies the JupyterLab debugger views',
+      describedBy: {
+        args: {
+          type: 'object',
+          properties: {
+            rank: {
+              type: 'integer',
+              minimum: 0,
+              description: 'Stopped distributed rank to inspect'
+            }
+          },
+          required: ['rank']
+        }
+      },
+      execute: async args => rankSelector.selectRank(Number(args.rank))
+    });
   }
 };
 
