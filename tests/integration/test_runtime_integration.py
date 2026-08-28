@@ -450,9 +450,7 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
         assert reply["status"] == "ok"
         assert data is not None
         assert data[RANK_MIME]["ranks"][0]["outputs"] == []
-        assert data[RANK_MIME]["ranks"][1]["outputs"][-1]["content"]["data"][
-            "text/plain"
-        ] == "101"
+        assert data[RANK_MIME]["ranks"][1]["outputs"][-1]["content"]["data"]["text/plain"] == "101"
 
         reply, data = await execute_through_proxy(
             client,
@@ -480,9 +478,10 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
         )
         assert reply["status"] == "ok"
         assert data is not None
-        assert data[RANK_MIME]["ranks"][0]["outputs"][-1]["content"]["data"][
-            "text/plain"
-        ] == "'captured on rank zero\\n'"
+        assert (
+            data[RANK_MIME]["ranks"][0]["outputs"][-1]["content"]["data"]["text/plain"]
+            == "'captured on rank zero\\n'"
+        )
         assert data[RANK_MIME]["ranks"][1]["outputs"] == []
 
         reply, data = await execute_through_proxy(client, "%%rank 2\nvalue = 1")

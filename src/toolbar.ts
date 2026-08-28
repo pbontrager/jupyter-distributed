@@ -7,6 +7,11 @@ import { DisposableDelegate, IDisposable } from '@lumino/disposable';
 import { Widget } from '@lumino/widgets';
 
 const METADATA_KEY = 'jupyter_distributed';
+const SINGLE_PROCESS_RANK_MAGIC_BOOTSTRAP = `
+from jupyter_distributed.rank_magic import register_single_process_rank_magic as _jd_register_rank_magic
+_jd_register_rank_magic(get_ipython())
+del _jd_register_rank_magic
+`.trim();
 
 interface DistributedKernelModel {
   kernel_id: string;
@@ -96,6 +101,7 @@ class ProcessSelector extends Widget {
         savedWorldSize === model.world_size
       ) {
         this._setWorldSize(model.world_size);
+        await this._ensureSingleProcessRankMagic(model.world_size);
         return;
       }
 
@@ -107,6 +113,7 @@ class ProcessSelector extends Widget {
       });
       if (kernelId === this._kernelId()) {
         this._setWorldSize(restored.world_size);
+        await this._ensureSingleProcessRankMagic(restored.world_size);
       }
     } catch (error) {
       // Keep the default value if the server extension is unavailable.
@@ -147,6 +154,7 @@ class ProcessSelector extends Widget {
     }
     if (next === previous) {
       this._saveWorldSize(next);
+      await this._ensureSingleProcessRankMagic(next);
       return;
     }
 
@@ -174,6 +182,7 @@ class ProcessSelector extends Widget {
       if (kernelId === this._kernelId()) {
         this._setWorldSize(model.world_size);
         this._saveWorldSize(model.world_size);
+        await this._ensureSingleProcessRankMagic(model.world_size);
       }
     } catch (error) {
       await showErrorMessage(
@@ -221,6 +230,35 @@ class ProcessSelector extends Widget {
       model.deleteMetadata(METADATA_KEY);
     } else {
       model.setMetadata(METADATA_KEY, { world_size: worldSize });
+    }
+  }
+
+  private async _ensureSingleProcessRankMagic(worldSize: number): Promise<void> {
+    if (worldSize !== 1) {
+      return;
+    }
+    const kernel = this._panel.sessionContext.session?.kernel;
+    if (!kernel) {
+      return;
+    }
+    try {
+      const info = await kernel.info;
+      if (
+        kernel !== this._panel.sessionContext.session?.kernel ||
+        !info.language_info.name.toLowerCase().startsWith('python')
+      ) {
+        return;
+      }
+      const future = kernel.requestExecute({
+        code: SINGLE_PROCESS_RANK_MAGIC_BOOTSTRAP,
+        silent: true,
+        store_history: false,
+        allow_stdin: false,
+        stop_on_error: false
+      });
+      await future.done;
+    } catch {
+      // The compatibility magic is optional for non-IPython Python kernels.
     }
   }
 
