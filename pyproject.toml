@@ -35,6 +35,15 @@ Homepage = "https://github.com/pbontrager/jupyter-distributed"
 Issues = "https://github.com/pbontrager/jupyter-distributed/issues"
 Demos = "https://github.com/pbontrager/jupyter-distributed/tree/main/demos"
 
+[project.optional-dependencies]
+mcp = [
+  "jupyter-collaboration>=5,<6",
+  "jupyter-ai-tools>=0.6.1,<1",
+  "jupyter-server-mcp>=0.2.2,<1",
+  "jupyterlab-commands-toolkit>=0.1.6,<1",
+  "jupyterlab-notebook-awareness>=0.2,<1",
+]
+
 [project.entry-points."jupyter_server_mcp.tools"]
 jupyter_distributed = "jupyter_distributed.mcp:TOOLS"
 

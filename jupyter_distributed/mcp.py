@@ -1,9 +1,8 @@
-"""Optional MCP tools for agents working with Jupyter Distributed notebooks."""
+"""Optional MCP tools for agents working with distributed notebooks."""
 
 from __future__ import annotations
 
 import inspect
-import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -12,22 +11,42 @@ from jupyter_server.serverapp import ServerApp
 
 from .kernel_proxy import RANK_MIME
 
+# jupyter-server-mcp discovers these functions when both optional integrations
+# are installed. The Jupyter AI tools provide general live-notebook operations;
+# this package adds the rank-aware operations specific to distributed execution.
 TOOLS = [
+    "jupyter_ai_tools.toolkits.notebook:read_notebook",
+    "jupyter_ai_tools.toolkits.notebook:read_notebook_cells",
+    "jupyter_ai_tools.toolkits.notebook:read_cell",
+    "jupyter_ai_tools.toolkits.notebook:add_cell",
+    "jupyter_ai_tools.toolkits.notebook:insert_cell",
+    "jupyter_ai_tools.toolkits.notebook:delete_cell",
+    "jupyter_ai_tools.toolkits.notebook:edit_cell",
+    "jupyter_ai_tools.toolkits.notebook:select_cell",
+    "jupyter_ai_tools.toolkits.notebook:get_cell_id_from_index",
+    "jupyter_ai_tools.toolkits.notebook:get_active_notebook",
+    "jupyter_ai_tools.toolkits.notebook:get_active_cell_id",
+    "jupyter_ai_tools.toolkits.notebook:create_notebook",
+    "jupyter_ai_tools.toolkits.jupyterlab:open_file",
+    "jupyter_ai_tools.toolkits.jupyterlab:run_cell",
+    "jupyter_ai_tools.toolkits.jupyterlab:run_all_cells",
     "jupyter_distributed.mcp:get_distributed_notebook_info",
     "jupyter_distributed.mcp:read_distributed_cell_outputs",
+    "jupyter_distributed.mcp:get_selected_notebook_cell",
+    "jupyter_distributed.mcp:append_execute_distributed_cell",
     "jupyter_distributed.mcp:select_distributed_debug_rank",
 ]
 
 
-async def get_distributed_notebook_info(notebook_path: str | None = None) -> dict[str, Any]:
-    """Use this first when working with a Jupyter Distributed notebook.
+async def get_distributed_notebook_info(
+    notebook_path: str | None = None,
+) -> dict[str, Any]:
+    """Inspect the process model for a Jupyter Distributed notebook.
 
-    The selected kernel may run as N persistent kernels using SPMD: every code
-    cell runs on every rank with independent rank-local state. This tool reports
-    N. Use read_distributed_cell_outputs to inspect every rank without switching
-    output tabs. Start a cell with %%rank N to run analysis code only on rank N.
-    While debugging in JupyterLab, use select_distributed_debug_rank to choose
-    the rank shown by Variables, Call Stack, and the Debug Console.
+    Call this before reasoning about execution. With more than one process,
+    ordinary cells run on every persistent rank using SPMD semantics and each
+    rank has independent state. Use ``%%rank N`` for rank-local analysis and
+    ``read_distributed_cell_outputs`` to inspect every rank.
     """
     path = await _notebook_path(notebook_path)
     server = _server_app()
@@ -51,7 +70,8 @@ async def get_distributed_notebook_info(notebook_path: str | None = None) -> dic
                 "world_size_source": "live_kernel",
             }
 
-    world_size = _saved_world_size(path)
+    document = await _read_notebook(path)
+    world_size = _saved_world_size(document)
     return {
         "notebook_path": _relative_notebook_path(server, path),
         "running": session is not None,
@@ -62,30 +82,35 @@ async def get_distributed_notebook_info(notebook_path: str | None = None) -> dic
 
 
 async def read_distributed_cell_outputs(
-    notebook_path: str,
     cell_id: str,
+    notebook_path: str | None = None,
 ) -> dict[str, Any]:
-    """Read every rank's output for one Jupyter Distributed notebook cell.
+    """Read every rank's output for one cell in the live notebook.
 
-    Output tabs are only a visual selector; do not switch them to inspect ranks.
-    This tool returns the saved structured outputs for all ranks, including each
-    rank's status, text, errors, and available rich MIME types.
+    Rank tabs and dropdowns only change the browser view. This returns the
+    structured output behind them, including text, errors, and available rich
+    MIME types for every rank.
     """
     path = await _notebook_path(notebook_path)
-    document = json.loads(path.read_text(encoding="utf-8"))
-    cell = next((item for item in document.get("cells", []) if item.get("id") == cell_id), None)
+    document = await _read_notebook(path)
+    cells = document.get("cells", [])
+    cell = next(
+        (item for item in cells if isinstance(item, Mapping) and item.get("id") == cell_id),
+        None,
+    )
     if cell is None:
         raise LookupError(f"No cell found with cell_id={cell_id!r}")
 
     executions = []
     for output in cell.get("outputs", []):
+        if not isinstance(output, Mapping):
+            continue
         data = output.get("data")
         if not isinstance(data, Mapping):
             continue
         payload = data.get(RANK_MIME)
-        if not isinstance(payload, Mapping):
-            continue
-        executions.append(_compact_execution(payload))
+        if isinstance(payload, Mapping):
+            executions.append(_compact_execution(payload))
 
     return {
         "notebook_path": _relative_notebook_path(_server_app(), path),
@@ -94,20 +119,64 @@ async def read_distributed_cell_outputs(
     }
 
 
+async def get_selected_notebook_cell() -> dict[str, Any]:
+    """Return the cell currently selected in the open JupyterLab notebook."""
+    from jupyter_ai_tools.toolkits.notebook import get_active_cell_id, read_cell_json
+
+    path = await _notebook_path(None)
+    notebook_path = _relative_notebook_path(_server_app(), path)
+    cell_id = await get_active_cell_id(notebook_path)
+    if cell_id is None:
+        raise RuntimeError("No selected notebook cell was found")
+    cell, cell_index = await read_cell_json(notebook_path, cell_id)
+    return {
+        "notebook_path": notebook_path,
+        "cell_id": cell_id,
+        "cell_index": cell_index,
+        "cell": cell,
+    }
+
+
+async def append_execute_distributed_cell(source: str) -> dict[str, Any]:
+    """Append and execute a code cell through the open notebook frontend.
+
+    Ordinary source runs on every rank. Prefix the source with ``%%rank N`` to
+    target one rank. Execution follows the notebook's normal frontend path so
+    live rank outputs, widgets, and existing kernel state are preserved.
+    """
+    from jupyter_ai_tools.toolkits.jupyterlab import run_cell
+    from jupyter_ai_tools.toolkits.notebook import add_cell, read_notebook_json
+
+    path = await _notebook_path(None)
+    notebook_path = _relative_notebook_path(_server_app(), path)
+    await add_cell(notebook_path, content=source, cell_type="code")
+    document = await read_notebook_json(notebook_path)
+    cells = document.get("cells", [])
+    if not cells or not isinstance(cells[-1], Mapping):
+        raise RuntimeError("The appended notebook cell could not be found")
+    cell_id = cells[-1].get("id")
+    if not isinstance(cell_id, str):
+        raise RuntimeError("The appended notebook cell has no id")
+    result = await run_cell(cell_id, file_path=notebook_path)
+    return {
+        "notebook_path": notebook_path,
+        "cell_id": cell_id,
+        "cell_index": len(cells) - 1,
+        "execution": result,
+    }
+
+
 async def select_distributed_debug_rank(rank: int) -> dict[str, Any]:
     """Select which stopped rank JupyterLab's debugger displays.
 
-    Use this only after the debugger is attached and the distributed program is
-    stopped. The chosen rank supplies Variables, Call Stack, and Debug Console
-    evaluation. Continue and step commands still apply to every rank.
+    Use this after the debugger is attached and execution is paused. Variables,
+    Call Stack, and Debug Console evaluation switch to the chosen rank;
+    continue and step commands still apply to every rank together.
     """
     if isinstance(rank, bool) or not isinstance(rank, int) or rank < 0:
         raise ValueError("rank must be a non-negative integer")
 
-    try:
-        from jupyterlab_commands_toolkit.tools import execute_command
-    except ImportError as error:
-        raise RuntimeError("Selecting a debug rank requires Jupyter AI in JupyterLab") from error
+    from jupyterlab_commands_toolkit.tools import execute_command
 
     response = await execute_command(
         "jupyter-distributed:select-debug-rank",
@@ -125,10 +194,8 @@ def _server_app() -> ServerApp:
 
 async def _notebook_path(notebook_path: str | None) -> Path:
     if notebook_path is None:
-        try:
-            from jupyter_ai_tools.toolkits.notebook import get_active_notebook
-        except ImportError as error:
-            raise RuntimeError("notebook_path is required outside Jupyter AI") from error
+        from jupyter_ai_tools.toolkits.notebook import get_active_notebook
+
         notebook_path = await get_active_notebook()
         if notebook_path is None:
             raise RuntimeError("No active notebook was found")
@@ -137,6 +204,16 @@ async def _notebook_path(notebook_path: str | None) -> Path:
     if not path.is_absolute():
         path = Path(_server_app().root_dir) / path
     return path.resolve()
+
+
+async def _read_notebook(path: Path) -> Mapping[str, Any]:
+    from jupyter_ai_tools.toolkits.notebook import read_notebook_json
+
+    notebook_path = _relative_notebook_path(_server_app(), path)
+    document = await read_notebook_json(notebook_path)
+    if not isinstance(document, Mapping):
+        raise TypeError(f"Notebook did not contain an object: {notebook_path}")
+    return document
 
 
 async def _find_session(server: ServerApp, path: Path) -> Mapping[str, Any] | None:
@@ -160,13 +237,10 @@ def _relative_notebook_path(server: ServerApp, path: Path) -> str:
         return str(path)
 
 
-def _saved_world_size(path: Path) -> int:
-    try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return 1
-    metadata = document.get("metadata", {}).get("jupyter_distributed", {})
-    world_size = metadata.get("world_size") if isinstance(metadata, Mapping) else None
+def _saved_world_size(document: Mapping[str, Any]) -> int:
+    metadata = document.get("metadata", {})
+    distributed = metadata.get("jupyter_distributed", {}) if isinstance(metadata, Mapping) else {}
+    world_size = distributed.get("world_size") if isinstance(distributed, Mapping) else None
     if isinstance(world_size, int) and not isinstance(world_size, bool) and world_size > 0:
         return world_size
     return 1
@@ -231,7 +305,9 @@ def _text(value: Any) -> str | None:
 
 __all__ = [
     "TOOLS",
+    "append_execute_distributed_cell",
     "get_distributed_notebook_info",
+    "get_selected_notebook_cell",
     "read_distributed_cell_outputs",
     "select_distributed_debug_rank",
 ]

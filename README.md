@@ -86,12 +86,41 @@ it prints a warning instead of starting competing `pdb` sessions.
 Notebook 7 supports distributed execution and rank-aware output, but the
 debugger integration is currently available only in JupyterLab.
 
-### Jupyter AI
+### Notebook agents with MCP
 
-When Jupyter AI is installed in the same server environment, Jupyter
-Distributed automatically adds MCP tools that let an agent check the live
-process count, read every rank's output, and select the rank shown in the
-JupyterLab debugger. No additional configuration is required.
+Install the optional MCP support:
+
+```bash
+pip install "jupyter-distributed[mcp]"
+```
+
+This lets an MCP-compatible agent work with the open notebook and its live
+kernel. The agent can inspect the selected cell and process count, edit and run
+cells, read every rank's output, and select a rank in the JupyterLab debugger.
+
+Starting JupyterLab also starts an MCP server at
+`http://localhost:3001/mcp`. It uses the Streamable HTTP transport, listens on
+localhost by default, and does not require an authentication token. Register
+that endpoint with your agent harness. For example:
+
+```bash
+codex mcp add jupyter --url http://localhost:3001/mcp
+claude mcp add --transport http jupyter http://localhost:3001/mcp
+```
+
+For OpenCode, Pi, or another MCP-compatible agent, register the same URL as a
+Streamable HTTP server. Then open a notebook in JupyterLab and ask the agent to
+work with it.
+
+For a Jupyter server on a remote machine, forward both the web and MCP ports in
+the same SSH connection:
+
+```bash
+ssh -L 8888:localhost:8888 -L 3001:localhost:3001 <host>
+```
+
+Keep the MCP port bound to localhost; the SSH tunnel makes it available to the
+local agent without exposing it on the remote network.
 
 ## Computation model
 

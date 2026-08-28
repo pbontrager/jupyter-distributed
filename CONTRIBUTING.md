@@ -5,7 +5,7 @@
 Install the Python development environment and notebook output filter:
 
 ```bash
-uv sync --group dev
+uv sync --extra mcp --group dev
 uv run nbstripout --install
 ```
 

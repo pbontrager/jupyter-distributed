@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -23,36 +23,31 @@ class FakeCoordinator:
         }
 
 
-class FakeSessionManager:
-    async def list_sessions(self) -> list[dict[str, Any]]:
-        return [
-            {
-                "path": "work/demo.ipynb",
-                "kernel": {"id": "kernel-id", "name": "python3"},
-            }
-        ]
-
-
-class FakeWebApp:
-    settings = {"jupyter_distributed_coordinator": FakeCoordinator()}
-
-
 @dataclass
 class FakeServer:
     root_dir: str
-    session_manager: FakeSessionManager = FakeSessionManager()
-    web_app: FakeWebApp = FakeWebApp()
+
+    def __post_init__(self) -> None:
+        self.web_app = SimpleNamespace(
+            settings={"jupyter_distributed_coordinator": FakeCoordinator()}
+        )
+
+
+async def _async_value(value: Any) -> Any:
+    return value
 
 
 @pytest.mark.asyncio
 async def test_reports_live_distributed_notebook_info(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    notebook = tmp_path / "work" / "demo.ipynb"
-    notebook.parent.mkdir()
-    notebook.write_text('{"metadata": {}}', encoding="utf-8")
     server = FakeServer(str(tmp_path))
+
+    async def find_session(*_args: Any) -> dict[str, Any]:
+        return {"kernel": {"id": "kernel-id"}}
+
     monkeypatch.setattr(mcp, "_server_app", lambda: server)
+    monkeypatch.setattr(mcp, "_find_session", find_session)
 
     result = await mcp.get_distributed_notebook_info("work/demo.ipynb")
 
@@ -71,72 +66,72 @@ async def test_reports_live_distributed_notebook_info(
 async def test_reads_compact_outputs_for_every_rank(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    notebook = tmp_path / "demo.ipynb"
-    notebook.write_text(
-        json.dumps(
+    document = {
+        "metadata": {"jupyter_distributed": {"world_size": 2}},
+        "cells": [
             {
-                "metadata": {"jupyter_distributed": {"world_size": 2}},
-                "cells": [
+                "id": "cell-id",
+                "cell_type": "code",
+                "source": "value",
+                "outputs": [
                     {
-                        "id": "cell-id",
-                        "cell_type": "code",
-                        "source": "value",
-                        "outputs": [
-                            {
-                                "output_type": "display_data",
-                                "data": {
-                                    RANK_MIME: {
-                                        "execution_id": "execution-id",
-                                        "execution_count": 1,
-                                        "status": "error",
-                                        "world_size": 2,
-                                        "ranks": [
+                        "output_type": "display_data",
+                        "data": {
+                            RANK_MIME: {
+                                "execution_id": "execution-id",
+                                "execution_count": 1,
+                                "status": "error",
+                                "world_size": 2,
+                                "ranks": [
+                                    {
+                                        "rank": 0,
+                                        "status": "ok",
+                                        "outputs": [
                                             {
-                                                "rank": 0,
-                                                "status": "ok",
-                                                "outputs": [
-                                                    {
-                                                        "type": "execute_result",
-                                                        "content": {
-                                                            "data": {
-                                                                "text/plain": "tensor(1)",
-                                                                "text/html": "<b>1</b>",
-                                                            }
-                                                        },
+                                                "type": "execute_result",
+                                                "content": {
+                                                    "data": {
+                                                        "text/plain": "tensor(1)",
+                                                        "text/html": "<b>1</b>",
                                                     }
-                                                ],
-                                            },
-                                            {
-                                                "rank": 1,
-                                                "status": "error",
-                                                "outputs": [
-                                                    {
-                                                        "type": "error",
-                                                        "content": {
-                                                            "ename": "ValueError",
-                                                            "evalue": "bad rank",
-                                                            "traceback": ["trace"],
-                                                        },
-                                                    }
-                                                ],
-                                            },
+                                                },
+                                            }
                                         ],
                                     },
-                                    "text/plain": "rank fallback",
-                                },
-                            }
-                        ],
+                                    {
+                                        "rank": 1,
+                                        "status": "error",
+                                        "outputs": [
+                                            {
+                                                "type": "error",
+                                                "content": {
+                                                    "ename": "ValueError",
+                                                    "evalue": "bad rank",
+                                                    "traceback": ["trace"],
+                                                },
+                                            }
+                                        ],
+                                    },
+                                ],
+                            },
+                            "text/plain": "rank fallback",
+                        },
                     }
                 ],
             }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(mcp, "_server_app", lambda: FakeServer(str(tmp_path)))
+        ],
+    }
 
-    result = await mcp.read_distributed_cell_outputs(str(notebook), "cell-id")
+    async def read_notebook(*_args: Any) -> dict[str, Any]:
+        return document
+
+    monkeypatch.setattr(mcp, "_server_app", lambda: FakeServer(str(tmp_path)))
+    monkeypatch.setattr(mcp, "_read_notebook", read_notebook)
+
+    result = await mcp.read_distributed_cell_outputs("cell-id", notebook_path="demo.ipynb")
 
     execution = result["executions"][0]
+    assert result["cell_id"] == "cell-id"
     assert execution["world_size"] == 2
     assert execution["ranks"][0]["outputs"][0] == {
         "type": "execute_result",
@@ -152,21 +147,16 @@ async def test_selects_debug_rank_through_jupyterlab(
 ) -> None:
     calls: list[tuple[str, dict[str, int]]] = []
 
-    async def execute_command(command: str, arguments: dict[str, int]) -> dict[str, Any]:
-        calls.append((command, arguments))
+    async def execute(command: str, args: dict[str, int]) -> dict[str, Any]:
+        calls.append((command, args))
         return {
             "success": True,
             "result": {"rank": 2, "availableRanks": [0, 1, 2, 3]},
         }
 
-    import sys
-    import types
+    import jupyterlab_commands_toolkit.tools
 
-    package = types.ModuleType("jupyterlab_commands_toolkit")
-    tools = types.ModuleType("jupyterlab_commands_toolkit.tools")
-    tools.execute_command = execute_command  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "jupyterlab_commands_toolkit", package)
-    monkeypatch.setitem(sys.modules, "jupyterlab_commands_toolkit.tools", tools)
+    monkeypatch.setattr(jupyterlab_commands_toolkit.tools, "execute_command", execute)
 
     result = await mcp.select_distributed_debug_rank(2)
 
@@ -174,8 +164,85 @@ async def test_selects_debug_rank_through_jupyterlab(
     assert result == {"rank": 2, "availableRanks": [0, 1, 2, 3]}
 
 
-def test_mcp_entrypoint_is_declared() -> None:
+@pytest.mark.asyncio
+async def test_returns_selected_cell(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def active_cell(_path: str) -> str:
+        return "cell-id"
+
+    async def read_cell(_path: str, cell_id: str) -> tuple[dict[str, Any], int]:
+        assert cell_id == "cell-id"
+        return {"id": cell_id, "source": "model"}, 3
+
+    import jupyter_ai_tools.toolkits.notebook
+
+    monkeypatch.setattr(mcp, "_server_app", lambda: FakeServer(str(tmp_path)))
+    monkeypatch.setattr(mcp, "_notebook_path", lambda _path: _async_value(tmp_path / "demo.ipynb"))
+    monkeypatch.setattr(jupyter_ai_tools.toolkits.notebook, "get_active_cell_id", active_cell)
+    monkeypatch.setattr(jupyter_ai_tools.toolkits.notebook, "read_cell_json", read_cell)
+
+    result = await mcp.get_selected_notebook_cell()
+
+    assert result == {
+        "notebook_path": "demo.ipynb",
+        "cell_id": "cell-id",
+        "cell_index": 3,
+        "cell": {"id": "cell-id", "source": "model"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_appends_and_executes_cell(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, Any]] = []
+
+    async def add_cell(path: str, *, content: str, cell_type: str) -> None:
+        calls.append(("add", (path, content, cell_type)))
+
+    async def read_notebook(_path: str) -> dict[str, Any]:
+        return {"cells": [{"id": "new-cell", "source": "model(dummy)"}]}
+
+    async def run_cell(cell_id: str, *, file_path: str) -> dict[str, Any]:
+        calls.append(("run", (cell_id, file_path)))
+        return {"success": True}
+
+    import jupyter_ai_tools.toolkits.jupyterlab
+    import jupyter_ai_tools.toolkits.notebook
+
+    monkeypatch.setattr(mcp, "_server_app", lambda: FakeServer(str(tmp_path)))
+    monkeypatch.setattr(mcp, "_notebook_path", lambda _path: _async_value(tmp_path / "demo.ipynb"))
+    monkeypatch.setattr(jupyter_ai_tools.toolkits.notebook, "add_cell", add_cell)
+    monkeypatch.setattr(jupyter_ai_tools.toolkits.notebook, "read_notebook_json", read_notebook)
+    monkeypatch.setattr(jupyter_ai_tools.toolkits.jupyterlab, "run_cell", run_cell)
+
+    result = await mcp.append_execute_distributed_cell("model(dummy)")
+
+    assert result == {
+        "notebook_path": "demo.ipynb",
+        "cell_id": "new-cell",
+        "cell_index": 0,
+        "execution": {"success": True},
+    }
+    assert calls == [
+        ("add", ("demo.ipynb", "model(dummy)", "code")),
+        ("run", ("new-cell", "demo.ipynb")),
+    ]
+
+
+def test_jupyter_server_mcp_tools_and_optional_extra_are_declared() -> None:
     project = Path("pyproject.toml").read_text(encoding="utf-8")
 
     assert '[project.entry-points."jupyter_server_mcp.tools"]' in project
     assert 'jupyter_distributed = "jupyter_distributed.mcp:TOOLS"' in project
+    assert "jupyter-server-mcp>=0.2.2,<1" in project
+    assert "jupyter-ai-tools>=0.6.1,<1" in project
+    assert "jupyterlab-commands-toolkit>=0.1.6,<1" in project
+    assert "jupyter-mcp-server" not in project
+    assert "jupyter-mcp-tools" not in project
+
+
+def test_tool_list_contains_notebook_and_distributed_tools() -> None:
+    assert "jupyter_ai_tools.toolkits.notebook:read_notebook" in mcp.TOOLS
+    assert "jupyter_ai_tools.toolkits.notebook:edit_cell" in mcp.TOOLS
+    assert "jupyter_ai_tools.toolkits.jupyterlab:run_cell" in mcp.TOOLS
+    assert "jupyter_distributed.mcp:get_distributed_notebook_info" in mcp.TOOLS
+    assert "jupyter_distributed.mcp:read_distributed_cell_outputs" in mcp.TOOLS
+    assert "jupyter_distributed.mcp:select_distributed_debug_rank" in mcp.TOOLS
