@@ -46,7 +46,10 @@ async def get_distributed_notebook_info(
     Call this before reasoning about execution. With more than one process,
     ordinary cells run on every persistent rank using SPMD semantics and each
     rank has independent state. Use ``%%rank N`` for rank-local analysis and
-    ``read_distributed_cell_outputs`` to inspect every rank.
+    ``read_distributed_cell_outputs`` to inspect every rank. Jupyter
+    Distributed supplies the standard PyTorch and JAX distributed environment
+    variables; notebook code should initialize the selected framework rather
+    than recreating those variables.
     """
     path = await _notebook_path(notebook_path)
     server = _server_app()
@@ -68,6 +71,7 @@ async def get_distributed_notebook_info(
                 "world_size": model["world_size"],
                 "distributed": model["distributed"],
                 "world_size_source": "live_kernel",
+                "framework_environment": _framework_environment(distributed=model["distributed"]),
             }
 
     document = await _read_notebook(path)
@@ -78,6 +82,7 @@ async def get_distributed_notebook_info(
         "world_size": world_size,
         "distributed": world_size > 1,
         "world_size_source": "notebook_metadata" if world_size > 1 else "default",
+        "framework_environment": _framework_environment(distributed=world_size > 1),
     }
 
 
@@ -244,6 +249,35 @@ def _saved_world_size(document: Mapping[str, Any]) -> int:
     if isinstance(world_size, int) and not isinstance(world_size, bool) and world_size > 0:
         return world_size
     return 1
+
+
+def _framework_environment(*, distributed: bool) -> dict[str, Any]:
+    return {
+        "active": distributed,
+        "provided_when_distributed": {
+            "pytorch": [
+                "RANK",
+                "LOCAL_RANK",
+                "WORLD_SIZE",
+                "LOCAL_WORLD_SIZE",
+                "MASTER_ADDR",
+                "MASTER_PORT",
+            ],
+            "jax": [
+                "JAX_COORDINATOR_ADDRESS",
+                "JAX_PROCESS_ID",
+                "JAX_NUM_PROCESSES",
+            ],
+        },
+        "guidance": (
+            "Do not set these variables in generated notebook code unless the user is "
+            "intentionally overriding a default before framework initialization. For "
+            "PyTorch, select the device from LOCAL_RANK when needed and call "
+            "torch.distributed.init_process_group(). For JAX, call "
+            "jax.distributed.initialize(). Jupyter Distributed does not initialize "
+            "collectives or shard data or models."
+        ),
+    }
 
 
 def _compact_execution(payload: Mapping[str, Any]) -> dict[str, Any]:

@@ -59,6 +59,32 @@ async def test_reports_live_distributed_notebook_info(
         "world_size": 4,
         "distributed": True,
         "world_size_source": "live_kernel",
+        "framework_environment": {
+            "active": True,
+            "provided_when_distributed": {
+                "pytorch": [
+                    "RANK",
+                    "LOCAL_RANK",
+                    "WORLD_SIZE",
+                    "LOCAL_WORLD_SIZE",
+                    "MASTER_ADDR",
+                    "MASTER_PORT",
+                ],
+                "jax": [
+                    "JAX_COORDINATOR_ADDRESS",
+                    "JAX_PROCESS_ID",
+                    "JAX_NUM_PROCESSES",
+                ],
+            },
+            "guidance": (
+                "Do not set these variables in generated notebook code unless the user is "
+                "intentionally overriding a default before framework initialization. For "
+                "PyTorch, select the device from LOCAL_RANK when needed and call "
+                "torch.distributed.init_process_group(). For JAX, call "
+                "jax.distributed.initialize(). Jupyter Distributed does not initialize "
+                "collectives or shard data or models."
+            ),
+        },
     }
 
 
