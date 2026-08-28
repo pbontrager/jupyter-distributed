@@ -138,7 +138,6 @@ class ProcessSelector extends Widget {
   }
 
   private _onChange = async (): Promise<void> => {
-    const kernelId = this._kernelId();
     const previous = Number(this._input.dataset.worldSize ?? '1');
     const rawValue = this._input.value.trim();
     const next = Number(rawValue);
@@ -152,28 +151,54 @@ class ProcessSelector extends Widget {
       return;
     }
 
-    if (!kernelId) {
-      return;
+    try {
+      await this.setWorldSize(next, true);
+    } catch (error) {
+      await showErrorMessage(
+        'Unable to change process count',
+        error instanceof Error ? error : String(error)
+      );
+      this._setWorldSize(previous);
     }
-    if (next === previous) {
+  };
+
+  async setWorldSize(
+    next: number,
+    confirm: boolean
+  ): Promise<DistributedKernelModel | null> {
+    if (!Number.isSafeInteger(next) || next < 1) {
+      throw new Error('Processes must be a positive integer.');
+    }
+    const kernelId = this._kernelId();
+    if (!kernelId) {
+      throw new Error('The notebook kernel is not connected.');
+    }
+    const current = await this._request(kernelId, 'GET');
+    if (kernelId !== this._kernelId()) {
+      throw new Error('The notebook kernel changed while setting processes.');
+    }
+    this._setWorldSize(current.world_size);
+
+    if (next === current.world_size) {
       this._saveWorldSize(next);
       await this._ensureSingleProcessRankMagic(next);
-      return;
+      return current;
     }
 
-    const result = await showDialog({
-      title: 'Restart kernel processes?',
-      body:
-        `Changing the process count from ${previous} to ${next} will restart ` +
-        'the selected kernel. All in-memory state will be lost.',
-      buttons: [
-        Dialog.cancelButton(),
-        Dialog.warnButton({ label: `Restart with ${next} processes` })
-      ]
-    });
-
-    if (!result.button.accept) {
-      return;
+    if (confirm) {
+      const result = await showDialog({
+        title: 'Restart kernel processes?',
+        body:
+          `Changing the process count from ${current.world_size} to ${next} ` +
+          'will restart the selected kernel. All in-memory state will be lost.',
+        buttons: [
+          Dialog.cancelButton(),
+          Dialog.warnButton({ label: `Restart with ${next} processes` })
+        ]
+      });
+      if (!result.button.accept) {
+        return null;
+      }
     }
 
     this._pending = true;
@@ -182,17 +207,13 @@ class ProcessSelector extends Widget {
       const model = await this._request(kernelId, 'POST', {
         world_size: next
       });
-      if (kernelId === this._kernelId()) {
-        this._setWorldSize(model.world_size);
-        this._saveWorldSize(model.world_size);
-        await this._ensureSingleProcessRankMagic(model.world_size);
+      if (kernelId !== this._kernelId()) {
+        throw new Error('The notebook kernel changed while setting processes.');
       }
-    } catch (error) {
-      await showErrorMessage(
-        'Unable to change process count',
-        error instanceof Error ? error : String(error)
-      );
-      this._setWorldSize(previous);
+      this._setWorldSize(model.world_size);
+      this._saveWorldSize(model.world_size);
+      await this._ensureSingleProcessRankMagic(model.world_size);
+      return model;
     } finally {
       this._pending = false;
       this._syncVisibility();
@@ -200,7 +221,7 @@ class ProcessSelector extends Widget {
         void this._syncFromServer();
       }
     }
-  };
+  }
 
   private _onKeyDown = (event: KeyboardEvent): void => {
     if (event.key === 'Enter') {
@@ -303,11 +324,24 @@ class ProcessSelector extends Widget {
 export class ProcessToolbarExtension
   implements DocumentRegistry.IWidgetExtension<NotebookPanel, INotebookModel>
 {
+  async setWorldSize(
+    panel: NotebookPanel,
+    worldSize: number,
+    confirm = false
+  ): Promise<DistributedKernelModel | null> {
+    const selector = this._selectors.get(panel);
+    if (!selector) {
+      throw new Error('The notebook process control is not available.');
+    }
+    return selector.setWorldSize(worldSize, confirm);
+  }
+
   createNew(
     panel: NotebookPanel,
     context: DocumentRegistry.IContext<INotebookModel>
   ): IDisposable {
     const selector = new ProcessSelector(panel);
+    this._selectors.set(panel, selector);
     if (
       !panel.toolbar.insertAfter(
         'kernelName',
@@ -317,8 +351,15 @@ export class ProcessToolbarExtension
     ) {
       panel.toolbar.addItem('jupyter-distributed-processes', selector);
     }
-    return new DisposableDelegate(() => selector.dispose());
+    return new DisposableDelegate(() => {
+      if (this._selectors.get(panel) === selector) {
+        this._selectors.delete(panel);
+      }
+      selector.dispose();
+    });
   }
+
+  private _selectors = new WeakMap<NotebookPanel, ProcessSelector>();
 }
 
 namespace Private {

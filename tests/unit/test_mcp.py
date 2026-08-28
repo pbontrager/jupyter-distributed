@@ -59,6 +59,13 @@ async def test_reports_live_distributed_notebook_info(
         "world_size": 4,
         "distributed": True,
         "world_size_source": "live_kernel",
+        "process_control": {
+            "change_tool": "set_distributed_processes",
+            "restarts_kernel": True,
+            "loses_in_memory_state": True,
+            "do_not_edit_notebook_metadata": True,
+            "do_not_use_generic_kernel_restart": True,
+        },
         "framework_environment": {
             "active": True,
             "provided_when_distributed": {
@@ -255,6 +262,49 @@ async def test_appends_and_executes_cell(tmp_path: Path, monkeypatch: pytest.Mon
     ]
 
 
+@pytest.mark.asyncio
+async def test_sets_processes_through_live_notebook_control(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def execute(command: str, args: dict[str, Any]) -> dict[str, Any]:
+        calls.append((command, args))
+        return {
+            "success": True,
+            "result": {
+                "kernel_id": "kernel-id",
+                "kernel_name": "python3",
+                "world_size": 4,
+                "distributed": True,
+            },
+        }
+
+    import jupyterlab_commands_toolkit.tools
+
+    monkeypatch.setattr(mcp, "_server_app", lambda: FakeServer(str(tmp_path)))
+    monkeypatch.setattr(mcp, "_notebook_path", lambda _path: _async_value(tmp_path / "demo.ipynb"))
+    monkeypatch.setattr(jupyterlab_commands_toolkit.tools, "execute_command", execute)
+
+    result = await mcp.set_distributed_processes(4, "demo.ipynb")
+
+    assert calls == [
+        (
+            "jupyter-distributed:set-processes",
+            {"processes": 4, "notebookPath": "demo.ipynb"},
+        )
+    ]
+    assert result["world_size"] == 4
+    assert result["distributed"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("processes", [True, 0, -1, 1.5])
+async def test_rejects_invalid_mcp_process_counts(processes: Any) -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        await mcp.set_distributed_processes(processes)  # type: ignore[arg-type]
+
+
 def test_jupyter_server_mcp_tools_and_optional_extra_are_declared() -> None:
     project = Path("pyproject.toml").read_text(encoding="utf-8")
 
@@ -276,4 +326,5 @@ def test_tool_list_contains_notebook_and_distributed_tools() -> None:
     assert "jupyter_ai_tools.toolkits.jupyterlab:run_cell" in mcp.TOOLS
     assert "jupyter_distributed.mcp:get_distributed_notebook_info" in mcp.TOOLS
     assert "jupyter_distributed.mcp:read_distributed_cell_outputs" in mcp.TOOLS
+    assert "jupyter_distributed.mcp:set_distributed_processes" in mcp.TOOLS
     assert "jupyter_distributed.mcp:select_distributed_debug_rank" in mcp.TOOLS

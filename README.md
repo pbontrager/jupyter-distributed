@@ -95,8 +95,9 @@ pip install "jupyter-distributed[mcp]"
 ```
 
 This lets an MCP-compatible agent work with the open notebook and its live
-kernel. The agent can inspect the selected cell and process count, edit and run
-cells, read every rank's output, and select a rank in the JupyterLab debugger.
+kernel. The agent can inspect the selected cell, safely change the live process
+count, edit and run cells, read every rank's output, and select a rank in the
+JupyterLab debugger.
 
 Starting JupyterLab also starts an MCP server at
 `http://localhost:3001/mcp`. It uses the Streamable HTTP transport, listens on

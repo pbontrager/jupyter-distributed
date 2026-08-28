@@ -29,11 +29,57 @@ const notebookPlugin: JupyterFrontEndPlugin<void> = {
     const rankSelections = new RankSelectionModel();
     const rankUpdates = new RankUpdateModel();
     const updateComms = new WeakMap<NotebookPanel, RankUpdateComm>();
+    const processControls = new ProcessToolbarExtension();
 
     app.docRegistry.addWidgetExtension(
       'Notebook',
-      new ProcessToolbarExtension()
+      processControls
     );
+
+    app.commands.addCommand('jupyter-distributed:set-processes', {
+      label: 'Set Distributed Processes',
+      caption: 'Set the process count and restart the selected notebook kernel',
+      describedBy: {
+        args: {
+          type: 'object',
+          properties: {
+            processes: {
+              type: 'integer',
+              minimum: 1,
+              description: 'Number of persistent notebook processes'
+            },
+            notebookPath: {
+              type: 'string',
+              description: 'Notebook path relative to the Jupyter server root'
+            }
+          },
+          required: ['processes']
+        }
+      },
+      execute: async args => {
+        const processes = Number(args.processes);
+        if (!Number.isSafeInteger(processes) || processes < 1) {
+          throw new Error('Processes must be a positive integer.');
+        }
+        const requestedPath =
+          typeof args.notebookPath === 'string'
+            ? args.notebookPath.replace(/^\/+/, '')
+            : null;
+        const panel = requestedPath
+          ? (notebooks.find(
+              candidate => candidate.context.path === requestedPath
+            ) ?? null)
+          : notebooks.currentWidget;
+        if (!panel) {
+          throw new Error(
+            requestedPath
+              ? `Notebook is not open in JupyterLab: ${requestedPath}`
+              : 'No active notebook was found.'
+          );
+        }
+        return processControls.setWorldSize(panel, processes);
+      }
+    });
 
     rendermime.addFactory(
       Private.rendererFactory(rendermime, rankSelections, rankUpdates),

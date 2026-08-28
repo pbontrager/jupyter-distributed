@@ -34,6 +34,7 @@ TOOLS = [
     "jupyter_distributed.mcp:read_distributed_cell_outputs",
     "jupyter_distributed.mcp:get_selected_notebook_cell",
     "jupyter_distributed.mcp:append_execute_distributed_cell",
+    "jupyter_distributed.mcp:set_distributed_processes",
     "jupyter_distributed.mcp:select_distributed_debug_rank",
 ]
 
@@ -49,7 +50,9 @@ async def get_distributed_notebook_info(
     ``read_distributed_cell_outputs`` to inspect every rank. Jupyter
     Distributed supplies the standard PyTorch and JAX distributed environment
     variables; notebook code should initialize the selected framework rather
-    than recreating those variables.
+    than recreating those variables. To change the process count, call
+    ``set_distributed_processes``; do not edit notebook metadata or use a
+    generic kernel restart operation.
     """
     path = await _notebook_path(notebook_path)
     server = _server_app()
@@ -71,6 +74,7 @@ async def get_distributed_notebook_info(
                 "world_size": model["world_size"],
                 "distributed": model["distributed"],
                 "world_size_source": "live_kernel",
+                "process_control": _process_control(),
                 "framework_environment": _framework_environment(distributed=model["distributed"]),
             }
 
@@ -82,6 +86,7 @@ async def get_distributed_notebook_info(
         "world_size": world_size,
         "distributed": world_size > 1,
         "world_size_source": "notebook_metadata" if world_size > 1 else "default",
+        "process_control": _process_control(),
         "framework_environment": _framework_environment(distributed=world_size > 1),
     }
 
@@ -169,6 +174,39 @@ async def append_execute_distributed_cell(source: str) -> dict[str, Any]:
         "cell_index": len(cells) - 1,
         "execution": result,
     }
+
+
+async def set_distributed_processes(
+    processes: int,
+    notebook_path: str | None = None,
+) -> dict[str, Any]:
+    """Set the live notebook process count and restart its kernel group.
+
+    Always use this tool to change processes. Do not edit notebook metadata or
+    call Jupyter's generic restart endpoint: neither operation configures the
+    distributed process group correctly. This tool performs the coordinated
+    restart and updates the notebook's Processes control and saved metadata.
+    All in-memory kernel state is lost. After this returns, cells may be run
+    normally with ``run_cell`` or ``append_execute_distributed_cell``.
+    """
+    if isinstance(processes, bool) or not isinstance(processes, int) or processes < 1:
+        raise ValueError("processes must be a positive integer")
+
+    path = await _notebook_path(notebook_path)
+    relative_path = _relative_notebook_path(_server_app(), path)
+
+    from jupyterlab_commands_toolkit.tools import execute_command
+
+    response = await execute_command(
+        "jupyter-distributed:set-processes",
+        {"processes": processes, "notebookPath": relative_path},
+    )
+    if not response.get("success"):
+        raise RuntimeError(str(response.get("error", "Unable to set distributed processes")))
+    result = response.get("result")
+    if not isinstance(result, Mapping):
+        raise RuntimeError("The process controller returned an invalid response")
+    return dict(result)
 
 
 async def select_distributed_debug_rank(rank: int) -> dict[str, Any]:
@@ -282,6 +320,16 @@ def _framework_environment(*, distributed: bool) -> dict[str, Any]:
     }
 
 
+def _process_control() -> dict[str, Any]:
+    return {
+        "change_tool": "set_distributed_processes",
+        "restarts_kernel": True,
+        "loses_in_memory_state": True,
+        "do_not_edit_notebook_metadata": True,
+        "do_not_use_generic_kernel_restart": True,
+    }
+
+
 def _compact_execution(payload: Mapping[str, Any]) -> dict[str, Any]:
     ranks = payload.get("ranks", [])
     return {
@@ -345,5 +393,6 @@ __all__ = [
     "get_distributed_notebook_info",
     "get_selected_notebook_cell",
     "read_distributed_cell_outputs",
+    "set_distributed_processes",
     "select_distributed_debug_rank",
 ]
