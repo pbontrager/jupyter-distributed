@@ -7,6 +7,7 @@ import html
 import os
 import signal
 import traceback
+from collections import OrderedDict
 from collections.abc import Mapping
 from typing import Any, ClassVar
 from uuid import uuid4
@@ -21,7 +22,9 @@ from .protocol import GroupExecution, RankOutput
 from .rank_magic import RankMagicError, parse_rank_cell
 
 RANK_MIME = "application/vnd.jupyter-distributed.rank+json"
+RANK_UPDATE_COMM_TARGET = "jupyter.distributed.rank_updates"
 _STREAM_UPDATE_INTERVAL = 0.05
+_RECENT_RANK_SNAPSHOTS = 64
 
 
 def render_plain(execution: GroupExecution) -> str:
@@ -47,13 +50,18 @@ def render_html(execution: GroupExecution) -> str:
 
 
 class _LiveRankDisplay:
-    """Coalesce rank output events into one updating notebook display."""
+    """Emit one durable output and publish its live rank snapshots separately."""
 
-    def __init__(self, kernel: SPMDKernel, execution_count: int) -> None:
+    def __init__(
+        self,
+        kernel: SPMDKernel,
+        execution_count: int,
+        cell_id: str | None,
+    ) -> None:
         self._kernel = kernel
         self._execution_count = execution_count
+        self._cell_id = cell_id
         self._execution_id = uuid4().hex
-        self._display_id = f"jupyter-distributed-{self._execution_id}"
         self._outputs: dict[int, tuple[RankOutput, ...]] = {
             rank: () for rank in range(kernel.group.world_size)
         }
@@ -69,7 +77,10 @@ class _LiveRankDisplay:
             if not any(self._outputs.values()):
                 return
             self._started = True
-            self._send("display_data", self._live_payload())
+            payload = self._live_payload()
+            snapshot = self._snapshot(payload)
+            self._send_display(snapshot["data"])
+            self._kernel.live_updates.publish(snapshot)
             return
         if self._flush_task is not None:
             return
@@ -87,17 +98,22 @@ class _LiveRankDisplay:
         payload = execution.as_dict()
         payload["execution_id"] = self._execution_id
         if self._started:
-            self._send("update_display_data", payload, execution=execution)
+            self._kernel.live_updates.publish(self._snapshot(payload, execution=execution))
         else:
             self._started = True
-            self._send("display_data", payload, execution=execution)
+            snapshot = self._snapshot(payload, execution=execution)
+            self._send_display(snapshot["data"])
+            self._kernel.live_updates.publish(snapshot)
 
     async def _flush_after(self, delay: float) -> None:
         if delay:
             await asyncio.sleep(delay)
         self._flush_task = None
         if self._dirty:
-            self._send("update_display_data", self._live_payload())
+            payload = self._live_payload()
+            self._kernel.live_updates.publish(self._snapshot(payload))
+            self._last_sent = asyncio.get_running_loop().time()
+            self._dirty = False
 
     def _live_payload(self) -> dict[str, Any]:
         return {
@@ -115,13 +131,12 @@ class _LiveRankDisplay:
             ],
         }
 
-    def _send(
+    def _snapshot(
         self,
-        message_type: str,
         payload: dict[str, Any],
         *,
         execution: GroupExecution | None = None,
-    ) -> None:
+    ) -> dict[str, Any]:
         if execution is None:
             plain = "\n\n".join(
                 f"[Rank {rank} — running]\n" + "".join(output.plain_text() for output in outputs)
@@ -134,17 +149,110 @@ class _LiveRankDisplay:
                 "text/html": render_html(execution),
                 "text/plain": render_plain(execution),
             }
+        return {
+            "execution_id": self._execution_id,
+            "cell_id": self._cell_id,
+            "final": execution is not None,
+            "data": data,
+            "metadata": {},
+        }
+
+    def _send_display(self, data: Mapping[str, Any]) -> None:
         self._kernel.send_response(
             self._kernel.iopub_socket,
-            message_type,
+            "display_data",
             {
-                "data": data,
+                "data": dict(data),
                 "metadata": {},
-                "transient": {"display_id": self._display_id},
             },
         )
         self._last_sent = asyncio.get_running_loop().time()
         self._dirty = False
+
+
+class _LiveRankUpdates:
+    """Publish live execution snapshots over a frontend-created Jupyter comm."""
+
+    def __init__(self, kernel: SPMDKernel) -> None:
+        self._kernel = kernel
+        self._subscribers: set[str] = set()
+        self._snapshots: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._cell_executions: dict[str, str] = {}
+
+    def handle_frontend(self, message_type: str, message: Mapping[str, Any]) -> bool:
+        content = message.get("content", {})
+        if not isinstance(content, Mapping):
+            return False
+        comm_id = content.get("comm_id")
+        if not isinstance(comm_id, str) or not comm_id:
+            return False
+
+        if message_type == "comm_open":
+            if content.get("target_name") != RANK_UPDATE_COMM_TARGET:
+                return False
+            self._subscribers.add(comm_id)
+            self._send_snapshots(comm_id)
+            return True
+
+        if comm_id not in self._subscribers:
+            return False
+        if message_type == "comm_close":
+            self._subscribers.discard(comm_id)
+        elif message_type == "comm_msg":
+            data = content.get("data", {})
+            if isinstance(data, Mapping) and data.get("method") == "request_snapshots":
+                self._send_snapshots(comm_id)
+        return True
+
+    def publish(self, snapshot: dict[str, Any]) -> None:
+        execution_id = snapshot.get("execution_id")
+        if not isinstance(execution_id, str) or not execution_id:
+            return
+        cell_id = snapshot.get("cell_id")
+        if isinstance(cell_id, str) and cell_id:
+            previous = self._cell_executions.get(cell_id)
+            if previous is not None and previous != execution_id:
+                self._snapshots.pop(previous, None)
+            self._cell_executions[cell_id] = execution_id
+        self._snapshots[execution_id] = snapshot
+        self._snapshots.move_to_end(execution_id)
+        while len(self._snapshots) > _RECENT_RANK_SNAPSHOTS:
+            removed_id, removed = self._snapshots.popitem(last=False)
+            removed_cell = removed.get("cell_id")
+            if (
+                isinstance(removed_cell, str)
+                and self._cell_executions.get(removed_cell) == removed_id
+            ):
+                self._cell_executions.pop(removed_cell, None)
+        self._broadcast({"method": "update", "snapshot": snapshot})
+
+    def comm_info(self) -> dict[str, dict[str, str]]:
+        return {comm_id: {"target_name": RANK_UPDATE_COMM_TARGET} for comm_id in self._subscribers}
+
+    def reset(self) -> None:
+        self._subscribers.clear()
+        self._snapshots.clear()
+        self._cell_executions.clear()
+
+    def _send_snapshots(self, comm_id: str) -> None:
+        self._send(
+            comm_id,
+            {
+                "method": "snapshots",
+                "snapshots": list(self._snapshots.values()),
+            },
+        )
+
+    def _broadcast(self, data: dict[str, Any]) -> None:
+        for comm_id in tuple(self._subscribers):
+            self._send(comm_id, data)
+
+    def _send(self, comm_id: str, data: dict[str, Any]) -> None:
+        self._kernel.send_response(
+            self._kernel.iopub_socket,
+            "comm_msg",
+            {"comm_id": comm_id, "data": data},
+        )
 
 
 class SPMDKernel(Kernel):
@@ -168,6 +276,7 @@ class SPMDKernel(Kernel):
         super().__init__(**kwargs)
         self._debugger = DistributedDebugger(self)
         self._comms = DistributedCommRouter(self)
+        self.live_updates = _LiveRankUpdates(self)
         self.group = DistributedKernelGroup(
             int(os.environ.get("JUPYTER_DISTRIBUTED_WORLD_SIZE", "1")),
             kernel_name=os.environ.get("JUPYTER_DISTRIBUTED_BASE_KERNEL", "python3"),
@@ -226,6 +335,7 @@ class SPMDKernel(Kernel):
             live_display = _LiveRankDisplay(
                 self,
                 self.group.execution_count + (1 if store_history else 0),
+                cell_id,
             )
         execution = await self.group.execute(
             executed_code,
@@ -296,14 +406,20 @@ class SPMDKernel(Kernel):
 
     async def comm_open(self, stream: Any, ident: Any, parent: Mapping[str, Any]) -> None:
         await self._ensure_started()
+        if self.live_updates.handle_frontend("comm_open", parent):
+            return
         await self._comms.handle_frontend("comm_open", parent)
 
     async def comm_msg(self, stream: Any, ident: Any, parent: Mapping[str, Any]) -> None:
         await self._ensure_started()
+        if self.live_updates.handle_frontend("comm_msg", parent):
+            return
         await self._comms.handle_frontend("comm_msg", parent)
 
     async def comm_close(self, stream: Any, ident: Any, parent: Mapping[str, Any]) -> None:
         await self._ensure_started()
+        if self.live_updates.handle_frontend("comm_close", parent):
+            return
         await self._comms.handle_frontend("comm_close", parent)
 
     async def comm_info_request(self, stream: Any, ident: Any, parent: Mapping[str, Any]) -> None:
@@ -313,15 +429,16 @@ class SPMDKernel(Kernel):
             return
         await self._ensure_started()
         target_name = parent.get("content", {}).get("target_name")
-        content = {
-            "status": "ok",
-            "comms": self._comms.comm_info(str(target_name) if target_name is not None else None),
-        }
+        comms = self._comms.comm_info(str(target_name) if target_name is not None else None)
+        if target_name is None or target_name == RANK_UPDATE_COMM_TARGET:
+            comms.update(self.live_updates.comm_info())
+        content = {"status": "ok", "comms": comms}
         self.session.send(stream, "comm_info_reply", content, parent, ident)
 
     async def do_shutdown(self, restart: bool) -> dict[str, Any]:
         await self.group.shutdown(now=True)
         self._comms.reset()
+        self.live_updates.reset()
         return {"status": "ok", "restart": restart}
 
     async def interrupt_group(self) -> None:

@@ -11,7 +11,7 @@ from jupyter_client.asynchronous.client import AsyncKernelClient
 
 from jupyter_distributed.coordinator import DistributedKernelCoordinator
 from jupyter_distributed.kernel_group import DistributedKernelGroup
-from jupyter_distributed.kernel_proxy import RANK_MIME
+from jupyter_distributed.kernel_proxy import RANK_MIME, RANK_UPDATE_COMM_TARGET
 
 
 def output_text(result: object) -> str:
@@ -77,10 +77,14 @@ async def test_two_rank_environment_state_outputs_errors_and_restart() -> None:
 async def execute_through_proxy(
     client: AsyncKernelClient, code: str
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    comm_id = open_rank_update_comm(client)
     message_id = client.execute(code)
     data = None
     while True:
         message = await client.get_iopub_msg(timeout=20)
+        snapshot = rank_update_snapshot(message, comm_id, message_id)
+        if snapshot is not None:
+            data = snapshot["data"]
         if message.get("parent_header", {}).get("msg_id") != message_id:
             continue
         if message["msg_type"] in {"display_data", "update_display_data"}:
@@ -88,7 +92,42 @@ async def execute_through_proxy(
         if message["msg_type"] == "status" and message["content"]["execution_state"] == "idle":
             break
     reply = await client.get_shell_msg(timeout=5)
+    client.shell_channel.send(
+        client.session.msg("comm_close", content={"comm_id": comm_id, "data": {}})
+    )
     return reply["content"], data
+
+
+def open_rank_update_comm(client: AsyncKernelClient) -> str:
+    comm_id = uuid4().hex
+    client.shell_channel.send(
+        client.session.msg(
+            "comm_open",
+            content={
+                "comm_id": comm_id,
+                "target_name": RANK_UPDATE_COMM_TARGET,
+                "data": {},
+            },
+        )
+    )
+    return comm_id
+
+
+def rank_update_snapshot(
+    message: dict[str, Any],
+    comm_id: str,
+    parent_id: str | None = None,
+) -> dict[str, Any] | None:
+    if (
+        message.get("msg_type") != "comm_msg"
+        or message.get("content", {}).get("comm_id") != comm_id
+    ):
+        return None
+    if parent_id is not None and message.get("parent_header", {}).get("msg_id") != parent_id:
+        return None
+    data = message["content"].get("data", {})
+    snapshot = data.get("snapshot") if data.get("method") == "update" else None
+    return snapshot if isinstance(snapshot, dict) else None
 
 
 async def debug_through_proxy(
@@ -213,6 +252,7 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
         assert breakpoints["success"] is True
         assert breakpoints["body"]["breakpoints"][0]["verified"] is True
 
+        debug_comm_id = open_rank_update_comm(client)
         debug_execution_id = client.execute(debug_code)
         stopped_threads: list[int] = []
         while len(stopped_threads) < 2:
@@ -312,6 +352,9 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
         debug_data = None
         while True:
             message = await client.get_iopub_msg(timeout=30)
+            snapshot = rank_update_snapshot(message, debug_comm_id, debug_execution_id)
+            if snapshot is not None:
+                debug_data = snapshot["data"]
             if message.get("parent_header", {}).get("msg_id") != debug_execution_id:
                 continue
             if message["msg_type"] in {"display_data", "update_display_data"}:
@@ -338,6 +381,7 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
             "    return rank + 20\n",
             encoding="utf-8",
         )
+        external_comm_id = open_rank_update_comm(client)
         external_execution_id = client.execute(
             f"import sys\nsys.path.insert(0, {str(tmp_path)!r})\n"
             "from debug_target import external_value\nexternal_value()"
@@ -372,6 +416,9 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
         external_data = None
         while True:
             message = await client.get_iopub_msg(timeout=30)
+            snapshot = rank_update_snapshot(message, external_comm_id, external_execution_id)
+            if snapshot is not None:
+                external_data = snapshot["data"]
             if message.get("parent_header", {}).get("msg_id") != external_execution_id:
                 continue
             if message["msg_type"] in {"display_data", "update_display_data"}:
@@ -400,6 +447,7 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
             )
         )["success"] is True
 
+        live_comm_id = open_rank_update_comm(client)
         live_id = client.execute(
             "import time\n"
             "print('started', flush=True)\n"
@@ -407,20 +455,52 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
             "print('finished', flush=True)"
         )
         saw_live_output = False
+        final_snapshot = None
+        output_messages = []
         while True:
             message = await client.get_iopub_msg(timeout=10)
-            if message.get("parent_header", {}).get("msg_id") != live_id:
-                continue
-            if message["msg_type"] == "update_display_data":
-                payload = message["content"]["data"].get(RANK_MIME)
+            if (
+                message["msg_type"] == "comm_msg"
+                and message["content"].get("comm_id") == live_comm_id
+            ):
+                data = message["content"].get("data", {})
+                snapshot = data.get("snapshot") if data.get("method") == "update" else None
+                payload = snapshot.get("data", {}).get(RANK_MIME) if snapshot else None
                 if payload and payload["status"] == "busy":
                     text = str(payload["ranks"][0]["outputs"])
                     saw_live_output = saw_live_output or "started" in text
+                if snapshot and snapshot.get("final"):
+                    final_snapshot = snapshot
+            if message.get("parent_header", {}).get("msg_id") != live_id:
+                continue
+            if message["msg_type"] in {"display_data", "update_display_data"}:
+                output_messages.append(message)
             if message["msg_type"] == "status" and message["content"]["execution_state"] == "idle":
                 break
         live_reply = await client.get_shell_msg(timeout=5)
         assert live_reply["content"]["status"] == "ok"
         assert saw_live_output
+        assert final_snapshot is not None
+        assert final_snapshot["data"][RANK_MIME]["status"] == "ok"
+        assert [message["msg_type"] for message in output_messages] == ["display_data"]
+        assert output_messages[0]["content"]["data"][RANK_MIME]["status"] == "busy"
+
+        reconnect_comm_id = open_rank_update_comm(client)
+        restored_message = await iopub_message(
+            client,
+            "comm_msg",
+            lambda message: (
+                message["content"].get("comm_id") == reconnect_comm_id
+                and message["content"].get("data", {}).get("method") == "snapshots"
+            ),
+        )
+        restored_snapshots = restored_message["content"]["data"]["snapshots"]
+        execution_id = output_messages[0]["content"]["data"][RANK_MIME]["execution_id"]
+        restored = next(
+            snapshot for snapshot in restored_snapshots if snapshot["execution_id"] == execution_id
+        )
+        assert restored["final"] is True
+        assert restored["data"][RANK_MIME]["status"] == "ok"
 
         reply, data = await execute_through_proxy(client, "silent_value = 123")
         assert reply["status"] == "ok"
@@ -489,6 +569,7 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
         assert reply["ename"] == "RankMagicError"
         assert data is None
 
+        interrupt_comm_id = open_rank_update_comm(client)
         message_id = client.execute("import time; time.sleep(60)")
         while True:
             message = await client.get_iopub_msg(timeout=10)
@@ -503,6 +584,9 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
         interrupted_data = None
         while True:
             message = await client.get_iopub_msg(timeout=10)
+            snapshot = rank_update_snapshot(message, interrupt_comm_id, message_id)
+            if snapshot is not None:
+                interrupted_data = snapshot["data"]
             if message.get("parent_header", {}).get("msg_id") != message_id:
                 continue
             if message["msg_type"] in {"display_data", "update_display_data"}:
@@ -554,6 +638,7 @@ async def test_widgets_route_by_rank_and_restore_state_with_binary_buffers() -> 
         await coordinator.set_world_size("widget-kernel", 2)
         await client.wait_for_ready(timeout=20)
 
+        rank_comm_id = open_rank_update_comm(client)
         execute_id = client.execute(
             "import ipywidgets as widgets, os\n"
             "from IPython.display import display\n"
@@ -568,6 +653,9 @@ async def test_widgets_route_by_rank_and_restore_state_with_binary_buffers() -> 
             message = await client.get_iopub_msg(timeout=20)
             if message["msg_type"] == "comm_open":
                 comm_opens[message["content"]["comm_id"]] = message
+            snapshot = rank_update_snapshot(message, rank_comm_id, execute_id)
+            if snapshot is not None:
+                rank_data = snapshot["data"]
             if message.get("parent_header", {}).get("msg_id") == execute_id and message[
                 "msg_type"
             ] in {"display_data", "update_display_data"}:

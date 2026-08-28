@@ -13,6 +13,7 @@ import {
   RankSelectionModel
 } from './outputRenderer';
 import { DebuggerRankSelector } from './debuggerRank';
+import { RankUpdateComm, RankUpdateModel } from './rankUpdates';
 import { ProcessToolbarExtension } from './toolbar';
 
 const notebookPlugin: JupyterFrontEndPlugin<void> = {
@@ -26,6 +27,8 @@ const notebookPlugin: JupyterFrontEndPlugin<void> = {
     notebooks: INotebookTracker
   ): void => {
     const rankSelections = new RankSelectionModel();
+    const rankUpdates = new RankUpdateModel();
+    const updateComms = new WeakMap<NotebookPanel, RankUpdateComm>();
 
     app.docRegistry.addWidgetExtension(
       'Notebook',
@@ -33,7 +36,7 @@ const notebookPlugin: JupyterFrontEndPlugin<void> = {
     );
 
     rendermime.addFactory(
-      Private.rendererFactory(rendermime, rankSelections),
+      Private.rendererFactory(rendermime, rankSelections, rankUpdates),
       0
     );
 
@@ -41,9 +44,14 @@ const notebookPlugin: JupyterFrontEndPlugin<void> = {
       const contextual = panel.content.rendermime;
       contextual.removeMimeType(MIME_TYPE);
       contextual.addFactory(
-        Private.rendererFactory(contextual, rankSelections),
+        Private.rendererFactory(contextual, rankSelections, rankUpdates),
         0
       );
+      if (!updateComms.has(panel)) {
+        const comm = new RankUpdateComm(panel, rankUpdates);
+        updateComms.set(panel, comm);
+        panel.disposed.connect(() => comm.dispose());
+      }
     };
     notebooks.forEach(registerNotebookRenderer);
     notebooks.widgetAdded.connect((_sender, panel) => {
@@ -97,13 +105,14 @@ export default [notebookPlugin, debuggerPlugin];
 namespace Private {
   export function rendererFactory(
     rendermime: IRenderMimeRegistry,
-    selections: RankSelectionModel
+    selections: RankSelectionModel,
+    updates: RankUpdateModel
   ): IRenderMime.IRendererFactory {
     return {
       mimeTypes: [MIME_TYPE],
       safe: true,
       createRenderer: options =>
-        new RankOutputRenderer(options, rendermime, selections)
+        new RankOutputRenderer(options, rendermime, selections, updates)
     };
   }
 }

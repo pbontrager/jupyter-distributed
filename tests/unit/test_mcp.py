@@ -261,8 +261,11 @@ def test_jupyter_server_mcp_tools_and_optional_extra_are_declared() -> None:
     assert '[project.entry-points."jupyter_server_mcp.tools"]' in project
     assert 'jupyter_distributed = "jupyter_distributed.mcp:TOOLS"' in project
     assert "jupyter-server-mcp>=0.2.2,<1" in project
-    assert "jupyter-ai-tools>=0.6.1,<1" in project
+    assert "jupyter-ai-tools>=0.7.0rc0,<1" in project
+    assert "jupyterlab-ai-commands>=0.4.0rc0,<1" in project
     assert "jupyterlab-commands-toolkit>=0.1.6,<1" in project
+    assert "jupyter-collaboration" not in project
+    assert "jupyterlab-notebook-awareness" not in project
     assert "jupyter-mcp-server" not in project
     assert "jupyter-mcp-tools" not in project
 
