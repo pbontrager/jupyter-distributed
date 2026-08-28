@@ -271,11 +271,13 @@ def _framework_environment(*, distributed: bool) -> dict[str, Any]:
         },
         "guidance": (
             "Do not set these variables in generated notebook code unless the user is "
-            "intentionally overriding a default before framework initialization. For "
-            "PyTorch, select the device from LOCAL_RANK when needed and call "
-            "torch.distributed.init_process_group(). For JAX, call "
-            "jax.distributed.initialize(). Jupyter Distributed does not initialize "
-            "collectives or shard data or models."
+            "intentionally overriding a default before framework initialization. "
+            "Initialize PyTorch with torch.distributed.init_process_group(), then use "
+            "torch.distributed.get_rank() and torch.distributed.get_world_size(). "
+            "Initialize JAX with jax.distributed.initialize(), then use "
+            "jax.process_index() and jax.process_count(). Backend selection, device "
+            "placement, collectives, and data or model sharding remain the user's "
+            "responsibility."
         ),
     }
 
