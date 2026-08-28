@@ -43,7 +43,7 @@
     "extension": true,
     "outputDir": "jupyter_distributed/labextension",
     "_build": {
-      "load": "static/remoteEntry.535ac9a9f576b4bf2dbf.js",
+      "load": "static/remoteEntry.aaeb6f7278f3b26698e6.js",
       "extension": "./extension",
       "style": "./style"
     }

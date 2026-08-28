@@ -58,8 +58,11 @@ class ProcessSelector extends Widget {
 
   private _syncVisibility(): void {
     const connected = this._kernelId() !== undefined;
-    this.setHidden(!connected);
+    this.setHidden(false);
     this._input.disabled = !connected || this._pending;
+    this.node.title = connected
+      ? ''
+      : 'Processes will be available when the notebook kernel connects.';
   }
 
   private _onKernelChanged = (): void => {
