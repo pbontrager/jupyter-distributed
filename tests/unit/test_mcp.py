@@ -84,17 +84,23 @@ async def test_reports_live_distributed_notebook_info(
                 "jupyterlab-ai-commands:run-cell",
             ],
         },
-        "framework_environment": {
+        "process_environment": {
             "active": True,
-            "provided_by_managed_kernel": {
-                "pytorch": [
-                    "RANK",
-                    "LOCAL_RANK",
-                    "WORLD_SIZE",
-                    "LOCAL_WORLD_SIZE",
-                    "MASTER_ADDR",
-                    "MASTER_PORT",
-                ],
+            "rank": "RANK",
+            "world_size": "WORLD_SIZE",
+            "provided_variables": [
+                "RANK",
+                "LOCAL_RANK",
+                "WORLD_SIZE",
+                "LOCAL_WORLD_SIZE",
+                "MASTER_ADDR",
+                "MASTER_PORT",
+                "JAX_COORDINATOR_ADDRESS",
+                "JAX_PROCESS_ID",
+                "JAX_NUM_PROCESSES",
+            ],
+            "framework_compatibility": {
+                "pytorch": ["RANK", "WORLD_SIZE", "MASTER_ADDR", "MASTER_PORT"],
                 "jax": [
                     "JAX_COORDINATOR_ADDRESS",
                     "JAX_PROCESS_ID",
@@ -102,14 +108,11 @@ async def test_reports_live_distributed_notebook_info(
                 ],
             },
             "guidance": (
-                "Do not set these variables in generated notebook code unless the user is "
-                "intentionally overriding a default before framework initialization. "
-                "Initialize PyTorch with torch.distributed.init_process_group(), then use "
-                "torch.distributed.get_rank() and torch.distributed.get_world_size(). "
-                "Initialize JAX with jax.distributed.initialize(), then use "
-                "jax.process_index() and jax.process_count(). Backend selection, device "
-                "placement, collectives, and data or model sharding remain the user's "
-                "responsibility."
+                "For generic SPMD code, read RANK and WORLD_SIZE directly from the process "
+                "environment (for example, int(os.environ['RANK']) in Python). Do not import "
+                "or initialize PyTorch, JAX, or another distributed framework unless the user "
+                "requests it or the notebook code requires its collectives. Do not recreate "
+                "these variables unless the user intentionally wants to override a default."
             ),
         },
     }

@@ -46,12 +46,11 @@ async def get_distributed_notebook_info(
     Call this before reasoning about execution. With more than one process,
     ordinary cells run on every persistent rank using SPMD semantics and each
     rank has independent state. Use ``%%rank N`` for rank-local analysis and
-    ``read_distributed_cell_outputs`` to inspect every rank. Jupyter
-    Distributed supplies the standard PyTorch and JAX distributed environment
-    variables; notebook code should initialize the selected framework rather
-    than recreating those variables. To change the process count, call
-    ``set_distributed_processes``; do not edit notebook metadata or use a
-    generic kernel restart operation.
+    ``read_distributed_cell_outputs`` to inspect every rank. Rank identity is
+    available directly through the ``RANK`` and ``WORLD_SIZE`` environment
+    variables; no framework initialization is needed to read it. To change the
+    process count, call ``set_distributed_processes``; do not edit notebook
+    metadata or use a generic kernel restart operation.
     """
     path = await _notebook_path(notebook_path)
     server = _server_app()
@@ -75,7 +74,7 @@ async def get_distributed_notebook_info(
                 "world_size_source": "live_kernel",
                 "process_control": _process_control(),
                 "cell_workflow": _cell_workflow(),
-                "framework_environment": _framework_environment(
+                "process_environment": _process_environment(
                     active=bool(model.get("proxied", model["distributed"]))
                 ),
             }
@@ -90,7 +89,7 @@ async def get_distributed_notebook_info(
         "world_size_source": "notebook_metadata" if world_size > 1 else "default",
         "process_control": _process_control(),
         "cell_workflow": _cell_workflow(),
-        "framework_environment": _framework_environment(active=False),
+        "process_environment": _process_environment(active=False),
     }
 
 
@@ -422,18 +421,24 @@ def _saved_world_size(document: Mapping[str, Any]) -> int:
     return 1
 
 
-def _framework_environment(*, active: bool) -> dict[str, Any]:
+def _process_environment(*, active: bool) -> dict[str, Any]:
     return {
         "active": active,
-        "provided_by_managed_kernel": {
-            "pytorch": [
-                "RANK",
-                "LOCAL_RANK",
-                "WORLD_SIZE",
-                "LOCAL_WORLD_SIZE",
-                "MASTER_ADDR",
-                "MASTER_PORT",
-            ],
+        "rank": "RANK",
+        "world_size": "WORLD_SIZE",
+        "provided_variables": [
+            "RANK",
+            "LOCAL_RANK",
+            "WORLD_SIZE",
+            "LOCAL_WORLD_SIZE",
+            "MASTER_ADDR",
+            "MASTER_PORT",
+            "JAX_COORDINATOR_ADDRESS",
+            "JAX_PROCESS_ID",
+            "JAX_NUM_PROCESSES",
+        ],
+        "framework_compatibility": {
+            "pytorch": ["RANK", "WORLD_SIZE", "MASTER_ADDR", "MASTER_PORT"],
             "jax": [
                 "JAX_COORDINATOR_ADDRESS",
                 "JAX_PROCESS_ID",
@@ -441,14 +446,11 @@ def _framework_environment(*, active: bool) -> dict[str, Any]:
             ],
         },
         "guidance": (
-            "Do not set these variables in generated notebook code unless the user is "
-            "intentionally overriding a default before framework initialization. "
-            "Initialize PyTorch with torch.distributed.init_process_group(), then use "
-            "torch.distributed.get_rank() and torch.distributed.get_world_size(). "
-            "Initialize JAX with jax.distributed.initialize(), then use "
-            "jax.process_index() and jax.process_count(). Backend selection, device "
-            "placement, collectives, and data or model sharding remain the user's "
-            "responsibility."
+            "For generic SPMD code, read RANK and WORLD_SIZE directly from the process "
+            "environment (for example, int(os.environ['RANK']) in Python). Do not import "
+            "or initialize PyTorch, JAX, or another distributed framework unless the user "
+            "requests it or the notebook code requires its collectives. Do not recreate "
+            "these variables unless the user intentionally wants to override a default."
         ),
     }
 
