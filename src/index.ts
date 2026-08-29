@@ -12,8 +12,9 @@ import {
   RankOutputRenderer,
   RankSelectionModel
 } from './outputRenderer';
+import { RANK_MIME_TYPE } from './constants';
 import { DebuggerRankSelector } from './debuggerRank';
-import { RankUpdateComm, RankUpdateModel } from './rankUpdates';
+import { RankOutputController } from './rankUpdates';
 import { ProcessToolbarExtension } from './toolbar';
 
 const notebookPlugin: JupyterFrontEndPlugin<void> = {
@@ -27,14 +28,31 @@ const notebookPlugin: JupyterFrontEndPlugin<void> = {
     notebooks: INotebookTracker
   ): void => {
     const rankSelections = new RankSelectionModel();
-    const rankUpdates = new RankUpdateModel();
-    const updateComms = new WeakMap<NotebookPanel, RankUpdateComm>();
-    const processControls = new ProcessToolbarExtension();
-
-    app.docRegistry.addWidgetExtension(
-      'Notebook',
-      processControls
+    const controllers = new WeakMap<NotebookPanel, RankOutputController>();
+    const controllerFor = (panel: NotebookPanel): RankOutputController => {
+      let controller = controllers.get(panel);
+      if (!controller) {
+        controller = new RankOutputController(panel);
+        controllers.set(panel, controller);
+        panel.disposed.connect(() => controller?.dispose());
+      }
+      return controller;
+    };
+    const processControls = new ProcessToolbarExtension(
+      async (panel, restarted) => {
+        const controller = controllerFor(panel);
+        const connected = restarted
+          ? await controller.reconnect()
+          : await controller.ensureConnected();
+        if (!connected) {
+          throw new Error(
+            'The distributed output channel did not connect after the kernel restart.'
+          );
+        }
+      }
     );
+
+    app.docRegistry.addWidgetExtension('Notebook', processControls);
 
     app.commands.addCommand('jupyter-distributed:set-processes', {
       label: 'Set Distributed Processes',
@@ -61,43 +79,79 @@ const notebookPlugin: JupyterFrontEndPlugin<void> = {
         if (!Number.isSafeInteger(processes) || processes < 1) {
           throw new Error('Processes must be a positive integer.');
         }
-        const requestedPath =
-          typeof args.notebookPath === 'string'
-            ? args.notebookPath.replace(/^\/+/, '')
-            : null;
-        const panel = requestedPath
-          ? (notebooks.find(
-              candidate => candidate.context.path === requestedPath
-            ) ?? null)
-          : notebooks.currentWidget;
-        if (!panel) {
-          throw new Error(
-            requestedPath
-              ? `Notebook is not open in JupyterLab: ${requestedPath}`
-              : 'No active notebook was found.'
-          );
-        }
+        const panel = Private.findNotebook(
+          notebooks,
+          typeof args.notebookPath === 'string' ? args.notebookPath : null
+        );
         return processControls.setWorldSize(panel, processes);
       }
     });
 
-    rendermime.addFactory(
-      Private.rendererFactory(rendermime, rankSelections, rankUpdates),
-      0
-    );
+    app.commands.addCommand('jupyter-distributed:run-cell', {
+      label: 'Run Distributed Cell',
+      caption: 'Run a cell and return its complete rank output',
+      describedBy: {
+        args: {
+          type: 'object',
+          properties: {
+            cellId: {
+              type: 'string',
+              description: 'Notebook cell ID to execute'
+            },
+            notebookPath: {
+              type: 'string',
+              description: 'Notebook path relative to the Jupyter server root'
+            }
+          },
+          required: ['cellId']
+        }
+      },
+      execute: async args => {
+        const cellId = typeof args.cellId === 'string' ? args.cellId : null;
+        if (!cellId) {
+          throw new Error('cellId is required.');
+        }
+        const panel = Private.findNotebook(
+          notebooks,
+          typeof args.notebookPath === 'string' ? args.notebookPath : null
+        );
+        const controller = controllerFor(panel);
+        if (!(await controller.ensureConnected())) {
+          throw new Error('The distributed output channel is not connected.');
+        }
+        if (!app.commands.hasCommand('jupyterlab-ai-commands:run-cell')) {
+          throw new Error('The Jupyter notebook command tools are not installed.');
+        }
+        const previousExecutionId = controller.latestExecutionId(cellId);
+        const execution = await app.commands.execute(
+          'jupyterlab-ai-commands:run-cell',
+          {
+            notebookPath: panel.context.path,
+            cellId
+          }
+        );
+        const executionRecord = Private.asRecord(execution);
+        const snapshot =
+          executionRecord?.hasOutput === false
+            ? null
+            : await controller.waitForFinal(cellId, previousExecutionId);
+        return {
+          execution,
+          distributed_execution: snapshot?.data[RANK_MIME_TYPE] ?? null
+        };
+      }
+    });
+
+    rendermime.addFactory(Private.rendererFactory(rendermime, rankSelections), 0);
 
     const registerNotebookRenderer = (panel: NotebookPanel): void => {
       const contextual = panel.content.rendermime;
       contextual.removeMimeType(MIME_TYPE);
       contextual.addFactory(
-        Private.rendererFactory(contextual, rankSelections, rankUpdates),
+        Private.rendererFactory(contextual, rankSelections),
         0
       );
-      if (!updateComms.has(panel)) {
-        const comm = new RankUpdateComm(panel, rankUpdates);
-        updateComms.set(panel, comm);
-        panel.disposed.connect(() => comm.dispose());
-      }
+      controllerFor(panel);
     };
     notebooks.forEach(registerNotebookRenderer);
     notebooks.widgetAdded.connect((_sender, panel) => {
@@ -151,14 +205,37 @@ export default [notebookPlugin, debuggerPlugin];
 namespace Private {
   export function rendererFactory(
     rendermime: IRenderMimeRegistry,
-    selections: RankSelectionModel,
-    updates: RankUpdateModel
+    selections: RankSelectionModel
   ): IRenderMime.IRendererFactory {
     return {
       mimeTypes: [MIME_TYPE],
       safe: true,
       createRenderer: options =>
-        new RankOutputRenderer(options, rendermime, selections, updates)
+        new RankOutputRenderer(options, rendermime, selections)
     };
+  }
+
+  export function findNotebook(
+    notebooks: INotebookTracker,
+    requestedPath: string | null
+  ): NotebookPanel {
+    const path = requestedPath?.replace(/^\/+/, '') ?? null;
+    const panel = path
+      ? (notebooks.find(candidate => candidate.context.path === path) ?? null)
+      : notebooks.currentWidget;
+    if (!panel) {
+      throw new Error(
+        path
+          ? `Notebook is not open in JupyterLab: ${path}`
+          : 'No active notebook was found.'
+      );
+    }
+    return panel;
+  }
+
+  export function asRecord(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
   }
 }

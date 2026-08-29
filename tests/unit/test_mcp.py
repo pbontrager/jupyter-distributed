@@ -323,13 +323,18 @@ async def test_reuses_first_cell_in_trailing_blank_run(
 async def test_run_cell_returns_complete_rank_results(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    executions = [
-        {"notebook_path": "demo.ipynb", "cell_id": "cell-id", "executions": []},
-        {
-            "notebook_path": "demo.ipynb",
-            "cell_id": "cell-id",
-            "executions": [
-                {
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def info(_path: str) -> dict[str, Any]:
+        return {"world_size": 2}
+
+    async def execute(command: str, args: dict[str, Any]) -> dict[str, Any]:
+        calls.append((command, args))
+        return {
+            "success": True,
+            "result": {
+                "execution": {"success": True, "status": "ok", "hasOutput": True},
+                "distributed_execution": {
                     "execution_id": "new",
                     "status": "ok",
                     "world_size": 2,
@@ -337,30 +342,25 @@ async def test_run_cell_returns_complete_rank_results(
                         {"rank": 0, "status": "ok", "outputs": [{"text": "0"}]},
                         {"rank": 1, "status": "ok", "outputs": [{"text": "2"}]},
                     ],
-                }
-            ],
-        },
-    ]
+                },
+            },
+        }
 
-    async def info(_path: str) -> dict[str, Any]:
-        return {"world_size": 2}
-
-    async def outputs(*_args: Any) -> dict[str, Any]:
-        return executions.pop(0)
-
-    async def run_cell(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
-        return {"success": True, "result": {"success": True, "status": "ok"}}
-
-    import jupyter_ai_tools.toolkits.jupyterlab
+    import jupyterlab_commands_toolkit.tools
 
     monkeypatch.setattr(mcp, "_server_app", lambda: FakeServer(str(tmp_path)))
     monkeypatch.setattr(mcp, "_notebook_path", lambda _path: _async_value(tmp_path / "demo.ipynb"))
     monkeypatch.setattr(mcp, "get_distributed_notebook_info", info)
-    monkeypatch.setattr(mcp, "read_distributed_cell_outputs", outputs)
-    monkeypatch.setattr(jupyter_ai_tools.toolkits.jupyterlab, "run_cell", run_cell)
+    monkeypatch.setattr(jupyterlab_commands_toolkit.tools, "execute_command", execute)
 
     result = await mcp.run_cell("cell-id", "demo.ipynb")
 
+    assert calls == [
+        (
+            "jupyter-distributed:run-cell",
+            {"cellId": "cell-id", "notebookPath": "demo.ipynb"},
+        )
+    ]
     assert result["success"] is True
     assert result["classification"] == "ok"
     assert result["rank_output_counts"] == {"0": 1, "1": 1}
@@ -373,28 +373,21 @@ async def test_run_cell_classifies_incomplete_aggregation_as_extension_error(
     async def info(_path: str) -> dict[str, Any]:
         return {"world_size": 4}
 
-    async def outputs(*_args: Any) -> dict[str, Any]:
-        return {"executions": []}
-
-    async def run_cell(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
-        return {"success": True, "result": {"success": True, "status": "ok"}}
-
-    async def incomplete(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+    async def execute(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
         return {
-            "execution_id": "new",
-            "status": "busy",
-            "world_size": 4,
-            "ranks": [{"rank": 0, "status": "running", "outputs": [{"text": "0"}]}],
+            "success": True,
+            "result": {
+                "execution": {"success": True, "status": "ok", "hasOutput": True},
+                "distributed_execution": None,
+            },
         }
 
-    import jupyter_ai_tools.toolkits.jupyterlab
+    import jupyterlab_commands_toolkit.tools
 
     monkeypatch.setattr(mcp, "_server_app", lambda: FakeServer(str(tmp_path)))
     monkeypatch.setattr(mcp, "_notebook_path", lambda _path: _async_value(tmp_path / "demo.ipynb"))
     monkeypatch.setattr(mcp, "get_distributed_notebook_info", info)
-    monkeypatch.setattr(mcp, "read_distributed_cell_outputs", outputs)
-    monkeypatch.setattr(mcp, "_wait_for_distributed_execution", incomplete)
-    monkeypatch.setattr(jupyter_ai_tools.toolkits.jupyterlab, "run_cell", run_cell)
+    monkeypatch.setattr(jupyterlab_commands_toolkit.tools, "execute_command", execute)
 
     result = await mcp.run_cell("cell-id", "demo.ipynb")
 
@@ -402,6 +395,37 @@ async def test_run_cell_classifies_incomplete_aggregation_as_extension_error(
     assert result["classification"] == "jupyter_distributed_error"
     assert "not evidence that the cell source is wrong" in result["message"]
     assert "recommended_action" not in result
+
+
+@pytest.mark.asyncio
+async def test_run_cell_accepts_a_successful_cell_without_outputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def info(_path: str) -> dict[str, Any]:
+        return {"world_size": 4}
+
+    async def execute(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {
+            "success": True,
+            "result": {
+                "execution": {"success": True, "status": "ok", "hasOutput": False},
+                "distributed_execution": None,
+            },
+        }
+
+    import jupyterlab_commands_toolkit.tools
+
+    monkeypatch.setattr(mcp, "_server_app", lambda: FakeServer(str(tmp_path)))
+    monkeypatch.setattr(mcp, "_notebook_path", lambda _path: _async_value(tmp_path / "demo.ipynb"))
+    monkeypatch.setattr(mcp, "get_distributed_notebook_info", info)
+    monkeypatch.setattr(jupyterlab_commands_toolkit.tools, "execute_command", execute)
+
+    result = await mcp.run_cell("cell-id", "demo.ipynb")
+
+    assert result["success"] is True
+    assert result["classification"] == "ok"
+    assert result["distributed_execution"] is None
+    assert result["rank_output_counts"] == {"0": 0, "1": 0, "2": 0, "3": 0}
 
 
 @pytest.mark.asyncio

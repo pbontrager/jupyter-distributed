@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 from collections.abc import Mapping
 from pathlib import Path
@@ -207,20 +206,36 @@ async def run_cell(
     ``jupyterlab-ai-commands:run-cell`` command returned by
     ``list_all_commands``.
     """
-    from jupyter_ai_tools.toolkits.jupyterlab import run_cell as upstream_run_cell
+    from jupyterlab_commands_toolkit.tools import execute_command
 
     path = await _notebook_path(notebook_path)
     relative_path = _relative_notebook_path(_server_app(), path)
     info = await get_distributed_notebook_info(relative_path)
     world_size = int(info["world_size"])
-    previous = await read_distributed_cell_outputs(cell_id, relative_path)
-    previous_ids = {
-        execution.get("execution_id")
-        for execution in previous["executions"]
-        if isinstance(execution, Mapping)
-    }
-
-    execution = await upstream_run_cell(cell_id, file_path=relative_path)
+    response = await execute_command(
+        "jupyter-distributed:run-cell",
+        {"cellId": cell_id, "notebookPath": relative_path},
+    )
+    result = response.get("result") if isinstance(response, Mapping) else None
+    if (
+        not isinstance(response, Mapping)
+        or not response.get("success")
+        or not isinstance(result, Mapping)
+    ):
+        return {
+            "success": False,
+            "classification": "execution_error",
+            "notebook_path": relative_path,
+            "cell_id": cell_id,
+            "world_size": world_size,
+            "execution": response,
+            "message": str(
+                response.get("error", "Unable to execute the notebook cell")
+                if isinstance(response, Mapping)
+                else "Unable to execute the notebook cell"
+            ),
+        }
+    execution = result.get("execution")
     if _tool_pending(execution):
         return {
             "success": True,
@@ -234,24 +249,26 @@ async def run_cell(
                 "Inspect the cell outputs again later."
             ),
         }
-    if world_size == 1:
+    distributed_value = result.get("distributed_execution")
+    distributed = (
+        _compact_execution(distributed_value)
+        if isinstance(distributed_value, Mapping)
+        else None
+    )
+    command_succeeded = _tool_succeeded(execution)
+    has_output = isinstance(execution, Mapping) and execution.get("hasOutput") is not False
+    if distributed is None and command_succeeded and not has_output:
         return {
-            "success": _tool_succeeded(execution),
-            "classification": "ok" if _tool_succeeded(execution) else "execution_error",
+            "success": True,
+            "classification": "ok",
             "notebook_path": relative_path,
             "cell_id": cell_id,
-            "world_size": 1,
+            "world_size": world_size,
             "execution": execution,
+            "distributed_execution": None,
+            "rank_output_counts": {str(rank): 0 for rank in range(world_size)},
         }
-
-    distributed = await _wait_for_distributed_execution(
-        cell_id,
-        relative_path,
-        previous_ids,
-        world_size,
-    )
     if distributed is None or not _execution_complete(distributed, world_size):
-        command_succeeded = _tool_succeeded(execution)
         return {
             "success": False,
             "classification": (
@@ -487,32 +504,6 @@ def _source_text(source: Any) -> str:
     if isinstance(source, list):
         return "".join(str(part) for part in source)
     return "" if source is None else str(source)
-
-
-async def _wait_for_distributed_execution(
-    cell_id: str,
-    notebook_path: str,
-    previous_ids: set[Any],
-    world_size: int,
-    timeout: float = 5.0,
-) -> Mapping[str, Any] | None:
-    deadline = asyncio.get_running_loop().time() + timeout
-    latest = None
-    while True:
-        outputs = await read_distributed_cell_outputs(cell_id, notebook_path)
-        executions = outputs.get("executions", [])
-        candidates = [
-            execution
-            for execution in executions
-            if isinstance(execution, Mapping) and execution.get("execution_id") not in previous_ids
-        ]
-        if candidates:
-            latest = candidates[-1]
-            if _execution_complete(latest, world_size):
-                return latest
-        if asyncio.get_running_loop().time() >= deadline:
-            return latest
-        await asyncio.sleep(0.1)
 
 
 def _execution_complete(execution: Mapping[str, Any], world_size: int) -> bool:

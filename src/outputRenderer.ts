@@ -3,13 +3,10 @@ import { IRenderMime } from '@jupyterlab/rendermime-interfaces';
 import { Signal } from '@lumino/signaling';
 import { Panel, Widget } from '@lumino/widgets';
 
-import {
-  executionId,
-  RankUpdateModel,
-  RankUpdateSnapshot
-} from './rankUpdates';
+import { RANK_MIME_TYPE } from './constants';
+import { executionId } from './rankUpdates';
 
-export const MIME_TYPE = 'application/vnd.jupyter-distributed.rank+json';
+export const MIME_TYPE = RANK_MIME_TYPE;
 const MIN_RANK_TAB_WIDTH = 72;
 
 type OutputType =
@@ -67,17 +64,14 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
   constructor(
     options: IRenderMime.IRendererOptions,
     rendermime: IRenderMimeRegistry,
-    selections: RankSelectionModel,
-    updates: RankUpdateModel
+    selections: RankSelectionModel
   ) {
     super();
     this.addClass('jp-JupyterDistributedRankOutput');
     this._mimeType = options.mimeType;
     this._rendermime = rendermime;
     this._selections = selections;
-    this._updates = updates;
     selections.changed.connect(this._onSelectionChanged, this);
-    updates.changed.connect(this._onRankUpdate, this);
     this._resizeObserver = new ResizeObserver(() => {
       this._updateNavigationMode();
     });
@@ -85,16 +79,8 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
   }
 
   async renderModel(model: IRenderMime.IMimeModel): Promise<void> {
-    this._model = model;
     this._executionId = executionId(model.data[this._mimeType]);
-    const snapshot = this._updates.get(this._executionId);
-    if (snapshot?.final) {
-      this._persist(snapshot);
-    }
-    await this._queueRender(
-      snapshot?.data[this._mimeType] ?? model.data[this._mimeType],
-      model.trusted
-    );
+    await this._queueRender(model.data[this._mimeType], model.trusted);
   }
 
   private async _queueRender(
@@ -209,7 +195,6 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
       return;
     }
     this._selections.changed.disconnect(this._onSelectionChanged, this);
-    this._updates.changed.disconnect(this._onRankUpdate, this);
     this._resizeObserver.disconnect();
     this._clear();
     super.dispose();
@@ -311,34 +296,6 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
     }
   }
 
-  private _onRankUpdate(
-    sender: RankUpdateModel,
-    change: { executionId: string; snapshot: RankUpdateSnapshot }
-  ): void {
-    if (change.executionId !== this._executionId) {
-      return;
-    }
-    if (change.snapshot.final) {
-      this._persist(change.snapshot);
-    }
-    void this._queueRender(
-      change.snapshot.data[this._mimeType],
-      this._model?.trusted ?? true
-    );
-  }
-
-  private _persist(snapshot: RankUpdateSnapshot): void {
-    const model = this._model;
-    if (!model) {
-      return;
-    }
-    const current = model.data[this._mimeType];
-    if (Private.payloadStatus(current) !== 'busy') {
-      return;
-    }
-    model.setData({ data: snapshot.data, metadata: snapshot.metadata });
-  }
-
   private _onDropdownChange = (): void => {
     if (!this._rankSelect) {
       return;
@@ -358,7 +315,6 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
   private _content = new Map<number, Panel>();
   private _executionId: string | null = null;
   private _mimeType: string;
-  private _model: IRenderMime.IMimeModel | null = null;
   private _pendingRender: { payload: unknown; trusted: boolean } | null = null;
   private _rankSelect: HTMLSelectElement | null = null;
   private _ranks: number[] = [];
@@ -368,18 +324,9 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
   private _selectedRank = 0;
   private _selections: RankSelectionModel;
   private _tabs: Widget | null = null;
-  private _updates: RankUpdateModel;
 }
 
 namespace Private {
-  export function payloadStatus(value: unknown): string | null {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      return null;
-    }
-    const status = (value as Record<string, unknown>).status;
-    return typeof status === 'string' ? status : null;
-  }
-
   export function createRankPickerNode(): HTMLElement {
     const label = document.createElement('label');
     const text = document.createElement('span');

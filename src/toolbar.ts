@@ -17,10 +17,17 @@ interface DistributedKernelModel {
 }
 
 class ProcessSelector extends Widget {
-  constructor(panel: NotebookPanel) {
+  constructor(
+    panel: NotebookPanel,
+    onKernelConfigured: (
+      panel: NotebookPanel,
+      restarted: boolean
+    ) => Promise<void>
+  ) {
     super({ node: Private.createNode() });
     this.addClass('jp-JupyterDistributedProcessSelector');
     this._panel = panel;
+    this._onKernelConfigured = onKernelConfigured;
     this._input = this.node.querySelector('input')!;
 
     this._input.addEventListener('change', this._onChange);
@@ -98,6 +105,7 @@ class ProcessSelector extends Widget {
       const targetWorldSize = savedWorldSize ?? model.world_size;
       if (model.proxied && targetWorldSize === model.world_size) {
         this._setWorldSize(model.world_size);
+        await this._onKernelConfigured(this._panel, false);
         return;
       }
 
@@ -109,6 +117,7 @@ class ProcessSelector extends Widget {
       });
       if (kernelId === this._kernelId()) {
         this._setWorldSize(restored.world_size);
+        await this._onKernelConfigured(this._panel, true);
       }
     } catch (error) {
       // Keep the default value if the server extension is unavailable.
@@ -173,6 +182,7 @@ class ProcessSelector extends Widget {
 
     if (current.proxied && next === current.world_size) {
       this._saveWorldSize(next);
+      await this._onKernelConfigured(this._panel, false);
       return current;
     }
 
@@ -203,6 +213,7 @@ class ProcessSelector extends Widget {
       }
       this._setWorldSize(model.world_size);
       this._saveWorldSize(model.world_size);
+      await this._onKernelConfigured(this._panel, true);
       return model;
     } finally {
       this._pending = false;
@@ -279,12 +290,25 @@ class ProcessSelector extends Widget {
   private _pending = false;
   private _ready = false;
   private _input: HTMLInputElement;
+  private _onKernelConfigured: (
+    panel: NotebookPanel,
+    restarted: boolean
+  ) => Promise<void>;
   private _syncRequest = 0;
 }
 
 export class ProcessToolbarExtension
   implements DocumentRegistry.IWidgetExtension<NotebookPanel, INotebookModel>
 {
+  constructor(
+    onKernelConfigured: (
+      panel: NotebookPanel,
+      restarted: boolean
+    ) => Promise<void>
+  ) {
+    this._onKernelConfigured = onKernelConfigured;
+  }
+
   async setWorldSize(
     panel: NotebookPanel,
     worldSize: number,
@@ -301,7 +325,7 @@ export class ProcessToolbarExtension
     panel: NotebookPanel,
     context: DocumentRegistry.IContext<INotebookModel>
   ): IDisposable {
-    const selector = new ProcessSelector(panel);
+    const selector = new ProcessSelector(panel, this._onKernelConfigured);
     this._selectors.set(panel, selector);
     if (
       !panel.toolbar.insertAfter(
@@ -320,6 +344,10 @@ export class ProcessToolbarExtension
     });
   }
 
+  private _onKernelConfigured: (
+    panel: NotebookPanel,
+    restarted: boolean
+  ) => Promise<void>;
   private _selectors = new WeakMap<NotebookPanel, ProcessSelector>();
 }
 

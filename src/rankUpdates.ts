@@ -1,11 +1,10 @@
+import { ICodeCellModel } from '@jupyterlab/cells';
 import { NotebookPanel } from '@jupyterlab/notebook';
 import { IRenderMime } from '@jupyterlab/rendermime-interfaces';
 import { Kernel, KernelMessage } from '@jupyterlab/services';
 import { IDisposable } from '@lumino/disposable';
-import { Signal } from '@lumino/signaling';
 
-export const RANK_UPDATE_COMM_TARGET = 'jupyter.distributed.rank_updates';
-const MAX_RECENT_SNAPSHOTS = 64;
+import { RANK_MIME_TYPE, RANK_UPDATE_COMM_TARGET } from './constants';
 
 export interface RankUpdateSnapshot {
   execution_id: string;
@@ -13,6 +12,13 @@ export interface RankUpdateSnapshot {
   final: boolean;
   data: IRenderMime.IMimeModel['data'];
   metadata: IRenderMime.IMimeModel['metadata'];
+}
+
+interface SnapshotWaiter {
+  cellId: string;
+  previousExecutionId: string | null;
+  resolve: (snapshot: RankUpdateSnapshot | null) => void;
+  timer: number;
 }
 
 export function executionId(value: unknown): string | null {
@@ -23,52 +29,93 @@ export function executionId(value: unknown): string | null {
   return typeof id === 'string' && id ? id : null;
 }
 
-/** Stores the newest live snapshot for each distributed cell execution. */
-export class RankUpdateModel {
-  readonly changed = new Signal<
-    this,
-    { executionId: string; snapshot: RankUpdateSnapshot }
-  >(this);
-
-  get(id: string | null): RankUpdateSnapshot | undefined {
-    return id ? this._snapshots.get(id) : undefined;
-  }
-
-  update(value: unknown): void {
-    const snapshot = Private.normalizeSnapshot(value);
-    if (!snapshot) {
-      return;
-    }
-    this._snapshots.delete(snapshot.execution_id);
-    this._snapshots.set(snapshot.execution_id, snapshot);
-    while (this._snapshots.size > MAX_RECENT_SNAPSHOTS) {
-      const oldest = this._snapshots.keys().next().value;
-      if (oldest === undefined) {
-        break;
-      }
-      this._snapshots.delete(oldest);
-    }
-    this.changed.emit({ executionId: snapshot.execution_id, snapshot });
-  }
-
-  private _snapshots = new Map<string, RankUpdateSnapshot>();
-}
-
-/** Maintains the frontend-created comm used for executor-independent updates. */
-export class RankUpdateComm implements IDisposable {
-  constructor(panel: NotebookPanel, updates: RankUpdateModel) {
+/** Owns rank-output state and the update comm for one notebook panel. */
+export class RankOutputController implements IDisposable {
+  constructor(panel: NotebookPanel) {
     this._panel = panel;
-    this._updates = updates;
     panel.sessionContext.kernelChanged.connect(this._onKernelChanged, this);
     panel.sessionContext.connectionStatusChanged.connect(
       this._onConnectionStatusChanged,
       this
     );
-    void this._connect();
+    void panel.context.ready.then(() => {
+      if (this._disposed) {
+        return;
+      }
+      panel.content.model?.contentChanged.connect(this._onContentChanged, this);
+      this._applyPending();
+      void this.ensureConnected();
+    });
   }
 
   get isDisposed(): boolean {
     return this._disposed;
+  }
+
+  latestExecutionId(cellId: string): string | null {
+    return this._cellExecutions.get(cellId)?.execution_id ?? null;
+  }
+
+  async ensureConnected(): Promise<boolean> {
+    if (this._disposed) {
+      return false;
+    }
+    const kernel = this._panel.sessionContext.session?.kernel ?? null;
+    if (
+      kernel &&
+      kernel === this._kernel &&
+      this._comm &&
+      !this._comm.isDisposed
+    ) {
+      return true;
+    }
+    if (this._connecting) {
+      return this._connecting;
+    }
+    const connecting = this._connect();
+    this._connecting = connecting;
+    try {
+      return await connecting;
+    } finally {
+      if (this._connecting === connecting) {
+        this._connecting = null;
+      }
+    }
+  }
+
+  async reconnect(): Promise<boolean> {
+    this._invalidateConnection();
+    const deadline = Date.now() + 10000;
+    do {
+      if (await this.ensureConnected()) {
+        return true;
+      }
+      await Private.delay(100);
+    } while (!this._disposed && Date.now() < deadline);
+    return false;
+  }
+
+  waitForFinal(
+    cellId: string,
+    previousExecutionId: string | null,
+    timeout = 5000
+  ): Promise<RankUpdateSnapshot | null> {
+    const current = this._cellExecutions.get(cellId);
+    if (current?.final && current.execution_id !== previousExecutionId) {
+      return Promise.resolve(current);
+    }
+    return new Promise(resolve => {
+      const waiter: SnapshotWaiter = {
+        cellId,
+        previousExecutionId,
+        resolve,
+        timer: window.setTimeout(() => {
+          this._waiters.delete(waiter);
+          resolve(null);
+        }, timeout)
+      };
+      this._waiters.add(waiter);
+    });
   }
 
   dispose(): void {
@@ -76,7 +123,10 @@ export class RankUpdateComm implements IDisposable {
       return;
     }
     this._disposed = true;
-    this._request += 1;
+    if (this._reconnectTimer !== null) {
+      window.clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
     this._panel.sessionContext.kernelChanged.disconnect(
       this._onKernelChanged,
       this
@@ -85,62 +135,107 @@ export class RankUpdateComm implements IDisposable {
       this._onConnectionStatusChanged,
       this
     );
-    this._disconnect();
+    this._panel.content.model?.contentChanged.disconnect(
+      this._onContentChanged,
+      this
+    );
+    this._invalidateConnection();
+    for (const waiter of this._waiters) {
+      window.clearTimeout(waiter.timer);
+      waiter.resolve(null);
+    }
+    this._waiters.clear();
   }
 
-  private async _connect(force = false): Promise<void> {
-    if (this._disposed) {
-      return;
-    }
+  private async _connect(): Promise<boolean> {
     const kernel = this._panel.sessionContext.session?.kernel ?? null;
-    if (
-      !force &&
-      kernel === this._kernel &&
-      this._comm &&
-      !this._comm.isDisposed
-    ) {
-      return;
-    }
-    const request = ++this._request;
-    this._disconnect();
     if (!kernel) {
-      return;
+      return false;
     }
-
+    const generation = this._generation;
     try {
-      // The logical kernel ID is retained when process count changes, while
-      // `kernel.info` may still contain the pre-restart implementation.
       const infoReply = await kernel.requestKernelInfo();
       const implementation =
         infoReply && 'implementation' in infoReply.content
           ? infoReply.content.implementation
           : null;
       if (
-        request !== this._request ||
         this._disposed ||
+        generation !== this._generation ||
         kernel !== this._panel.sessionContext.session?.kernel ||
         implementation !== 'jupyter_distributed'
       ) {
-        return;
+        return false;
       }
+
+      this._closeComm();
       this._kernel = kernel;
       const comm = kernel.createComm(RANK_UPDATE_COMM_TARGET);
-      comm.onMsg = this._onMessage;
+      let settleReady: (ready: boolean) => void = () => undefined;
+      const ready = new Promise<boolean>(resolve => {
+        const timer = window.setTimeout(() => resolve(false), 5000);
+        settleReady = value => {
+          window.clearTimeout(timer);
+          resolve(value);
+        };
+      });
+      comm.onMsg = message => {
+        this._onMessage(message);
+        const data = message.content.data as Record<string, unknown>;
+        if (data.method === 'snapshots') {
+          settleReady(true);
+        }
+      };
       comm.onClose = () => {
+        settleReady(false);
         if (this._comm === comm) {
           this._comm = null;
+          this._kernel = null;
+          this._scheduleReconnect();
         }
       };
       this._comm = comm;
       void comm.open({}).done.catch(error => {
-        console.warn('Unable to open distributed rank update comm', error);
+        settleReady(false);
+        if (this._comm === comm) {
+          this._comm = null;
+          this._kernel = null;
+          console.warn('Unable to open distributed rank update comm', error);
+          this._scheduleReconnect();
+        }
       });
+      const connected = await ready;
+      if (
+        !connected ||
+        this._disposed ||
+        generation !== this._generation ||
+        this._comm !== comm
+      ) {
+        if (this._comm === comm) {
+          this._closeComm();
+          this._scheduleReconnect();
+        }
+        return false;
+      }
+      return true;
     } catch (error) {
       console.warn('Unable to connect distributed rank updates', error);
+      this._scheduleReconnect();
+      return false;
     }
   }
 
   private _disconnect(): void {
+    this._invalidateConnection();
+  }
+
+  private _invalidateConnection(): void {
+    this._generation += 1;
+    this._connecting = null;
+    this._closeComm();
+  }
+
+  private _closeComm(): void {
     const comm = this._comm;
     this._comm = null;
     this._kernel = null;
@@ -154,41 +249,131 @@ export class RankUpdateComm implements IDisposable {
     }
   }
 
+  private _record(value: unknown): void {
+    const snapshot = Private.normalizeSnapshot(value);
+    if (!snapshot) {
+      return;
+    }
+    if (snapshot.cell_id) {
+      this._cellExecutions.set(snapshot.cell_id, snapshot);
+    }
+    if (!this._apply(snapshot) && snapshot.cell_id) {
+      this._pending.set(snapshot.execution_id, snapshot);
+    }
+    if (snapshot.final && snapshot.cell_id) {
+      for (const waiter of [...this._waiters]) {
+        if (
+          waiter.cellId === snapshot.cell_id &&
+          waiter.previousExecutionId !== snapshot.execution_id
+        ) {
+          window.clearTimeout(waiter.timer);
+          this._waiters.delete(waiter);
+          waiter.resolve(snapshot);
+        }
+      }
+    }
+  }
+
+  private _apply(snapshot: RankUpdateSnapshot): boolean {
+    if (!snapshot.cell_id) {
+      return false;
+    }
+    const cells = this._panel.content.model?.cells;
+    if (!cells) {
+      return false;
+    }
+    let cell: ICodeCellModel | null = null;
+    for (let index = 0; index < cells.length; index++) {
+      const candidate = cells.get(index);
+      if (candidate.id === snapshot.cell_id && candidate.type === 'code') {
+        cell = candidate as ICodeCellModel;
+        break;
+      }
+    }
+    if (!cell) {
+      return false;
+    }
+    for (let index = 0; index < cell.outputs.length; index++) {
+      const output = cell.outputs.get(index);
+      if (executionId(output.data[RANK_MIME_TYPE]) === snapshot.execution_id) {
+        this._pending.delete(snapshot.execution_id);
+        output.setData({ data: snapshot.data, metadata: snapshot.metadata });
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private _applyPending(): void {
+    for (const snapshot of [...this._pending.values()]) {
+      this._apply(snapshot);
+    }
+  }
+
+  private _scheduleReconnect(): void {
+    if (
+      this._disposed ||
+      this._reconnectTimer !== null ||
+      this._panel.sessionContext.session?.kernel?.connectionStatus !==
+        'connected'
+    ) {
+      return;
+    }
+    this._reconnectTimer = window.setTimeout(() => {
+      this._reconnectTimer = null;
+      void this.ensureConnected();
+    }, 250);
+  }
+
   private _onKernelChanged = (): void => {
-    void this._connect(true);
+    this._disconnect();
+    void this.ensureConnected();
   };
 
   private _onConnectionStatusChanged = (): void => {
-    if (
-      this._panel.sessionContext.session?.kernel?.connectionStatus ===
-      'connected'
-    ) {
-      void this._connect(true);
+    const status =
+      this._panel.sessionContext.session?.kernel?.connectionStatus;
+    if (status === 'connected') {
+      void this.ensureConnected();
+    } else {
+      this._disconnect();
     }
+  };
+
+  private _onContentChanged = (): void => {
+    this._applyPending();
   };
 
   private _onMessage = (message: KernelMessage.ICommMsgMsg): void => {
     const data = message.content.data as Record<string, unknown>;
     if (data.method === 'update') {
-      this._updates.update(data.snapshot);
+      this._record(data.snapshot);
       return;
     }
     if (data.method === 'snapshots' && Array.isArray(data.snapshots)) {
       for (const snapshot of data.snapshots) {
-        this._updates.update(snapshot);
+        this._record(snapshot);
       }
     }
   };
 
+  private _cellExecutions = new Map<string, RankUpdateSnapshot>();
   private _comm: Kernel.IComm | null = null;
+  private _connecting: Promise<boolean> | null = null;
   private _disposed = false;
+  private _generation = 0;
   private _kernel: Kernel.IKernelConnection | null = null;
   private _panel: NotebookPanel;
-  private _request = 0;
-  private _updates: RankUpdateModel;
+  private _pending = new Map<string, RankUpdateSnapshot>();
+  private _reconnectTimer: number | null = null;
+  private _waiters = new Set<SnapshotWaiter>();
 }
 
 namespace Private {
+  export function delay(milliseconds: number): Promise<void> {
+    return new Promise(resolve => window.setTimeout(resolve, milliseconds));
+  }
+
   export function normalizeSnapshot(value: unknown): RankUpdateSnapshot | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
       return null;
