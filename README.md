@@ -36,12 +36,15 @@ server after installing or upgrading the package.
    many persistent processes.
 4. Select a rank tab to inspect its output.
 
+When a notebook kernel first connects, Jupyter Distributed restarts it once
+behind the same managed execution path used for multiple processes. At the
+default of one process, outputs display normally without rank navigation.
+
 Changing the process count stops the current kernel processes, starts a new
 group at the requested size, and clears all in-memory state.
 
-With **Processes** greater than `1`, run a cell on only one zero-based rank by
-starting it with `%%rank N`. The wrapper can contain ordinary code or another
-cell magic:
+Run a cell on only one zero-based rank by starting it with `%%rank N`. The
+wrapper can contain ordinary code or another cell magic:
 
 ```python
 %%rank 1
@@ -173,7 +176,8 @@ workloads are flagship use cases.
 
 ### PyTorch
 
-To make `torch.distributed` convenient, each process receives
+To make `torch.distributed` convenient, each process receives these variables
+at every process count, including one:
 torchrun-compatible environment variables:
 
 - `RANK`
@@ -211,7 +215,7 @@ require a longer timeout.
 
 ### JAX
 
-JAX processes additionally receive:
+JAX processes additionally receive these variables at every process count:
 
 - `JAX_COORDINATOR_ADDRESS`
 - `JAX_PROCESS_ID`

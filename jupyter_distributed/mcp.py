@@ -76,7 +76,9 @@ async def get_distributed_notebook_info(
                 "world_size_source": "live_kernel",
                 "process_control": _process_control(),
                 "cell_workflow": _cell_workflow(),
-                "framework_environment": _framework_environment(distributed=model["distributed"]),
+                "framework_environment": _framework_environment(
+                    active=bool(model.get("proxied", model["distributed"]))
+                ),
             }
 
     document = await _read_notebook(path)
@@ -89,7 +91,7 @@ async def get_distributed_notebook_info(
         "world_size_source": "notebook_metadata" if world_size > 1 else "default",
         "process_control": _process_control(),
         "cell_workflow": _cell_workflow(),
-        "framework_environment": _framework_environment(distributed=world_size > 1),
+        "framework_environment": _framework_environment(active=False),
     }
 
 
@@ -409,10 +411,10 @@ def _saved_world_size(document: Mapping[str, Any]) -> int:
     return 1
 
 
-def _framework_environment(*, distributed: bool) -> dict[str, Any]:
+def _framework_environment(*, active: bool) -> dict[str, Any]:
     return {
-        "active": distributed,
-        "provided_when_distributed": {
+        "active": active,
+        "provided_by_managed_kernel": {
             "pytorch": [
                 "RANK",
                 "LOCAL_RANK",

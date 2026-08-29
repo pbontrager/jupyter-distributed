@@ -12,7 +12,7 @@ from typing import Any
 
 @dataclass(slots=True)
 class DistributedKernelState:
-    """Launch information retained while a logical kernel is distributed."""
+    """Launch information retained while a logical kernel is proxy-managed."""
 
     kernel_name: str
     original_argv: tuple[str, ...]
@@ -20,14 +20,15 @@ class DistributedKernelState:
     original_env: dict[str, str] | None
     original_cwd: str | None
     world_size: int = 1
+    proxied: bool = False
 
 
 class DistributedKernelCoordinator:
-    """Switch managed kernels between direct and distributed execution.
+    """Run managed notebook kernels through one persistent proxy architecture.
 
     The Jupyter Server continues to expose the original kernel ID and kernel
-    name. For ``world_size > 1`` its process is restarted as an internal proxy,
-    which launches copies of the originally selected kernelspec.
+    name. The process is restarted as an internal proxy, which launches one or
+    more copies of the originally selected kernelspec.
     """
 
     def __init__(self, kernel_manager: Any) -> None:
@@ -43,6 +44,7 @@ class DistributedKernelCoordinator:
             "kernel_name": state.kernel_name if state else kernel.kernel_name,
             "world_size": state.world_size if state else 1,
             "distributed": bool(state and state.world_size > 1),
+            "proxied": bool(state and state.proxied),
         }
 
     async def set_world_size(self, kernel_id: str, world_size: int) -> dict[str, Any]:
@@ -58,24 +60,24 @@ class DistributedKernelCoordinator:
             if state is None:
                 state = self._capture_state(kernel)
                 self._states[kernel_id] = state
-            if state.world_size == world_size:
+            if state.proxied and state.world_size == world_size:
                 return self.describe(kernel_id)
 
-            if world_size == 1:
-                self._configure_direct(kernel, state)
-            else:
-                self._configure_proxy(kernel, state, world_size)
+            previous_world_size = state.world_size
+            previously_proxied = state.proxied
+            self._configure_proxy(kernel, state, world_size)
 
             try:
                 await self.kernel_manager.restart_kernel(kernel_id)
             except BaseException:
-                if state.world_size == 1:
-                    self._configure_direct(kernel, state)
+                if previously_proxied:
+                    self._configure_proxy(kernel, state, previous_world_size)
                 else:
-                    self._configure_proxy(kernel, state, state.world_size)
+                    self._configure_direct(kernel, state)
                 raise
 
             state.world_size = world_size
+            state.proxied = True
             return self.describe(kernel_id)
 
     def forget(self, kernel_id: str) -> None:

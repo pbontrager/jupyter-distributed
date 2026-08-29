@@ -20,6 +20,7 @@ class FakeCoordinator:
             "kernel_name": "python3",
             "world_size": 4,
             "distributed": True,
+            "proxied": True,
         }
 
 
@@ -83,7 +84,7 @@ async def test_reports_live_distributed_notebook_info(
         },
         "framework_environment": {
             "active": True,
-            "provided_when_distributed": {
+            "provided_by_managed_kernel": {
                 "pytorch": [
                     "RANK",
                     "LOCAL_RANK",

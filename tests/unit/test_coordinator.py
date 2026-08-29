@@ -39,15 +39,23 @@ class FakeKernelManager:
 
 
 @pytest.mark.asyncio
-async def test_switches_between_selected_kernel_and_internal_proxy() -> None:
+async def test_keeps_every_process_count_on_the_internal_proxy() -> None:
     manager = FakeKernelManager()
     coordinator = DistributedKernelCoordinator(manager)
-    original_argv = list(manager.kernel.kernel_spec.argv)
+
+    single = await coordinator.set_world_size("kernel-id", 1)
+
+    assert single["distributed"] is False
+    assert single["proxied"] is True
+    assert manager.kernel.kernel_spec.argv[1:3] == ["-m", "jupyter_distributed.kernel"]
+    assert manager.kernel.kernel_spec.interrupt_mode == "message"
+    assert manager.kernel._launch_args["env"]["JUPYTER_DISTRIBUTED_WORLD_SIZE"] == "1"
 
     distributed = await coordinator.set_world_size("kernel-id", 4)
 
     assert distributed["kernel_name"] == "custom-python"
     assert distributed["world_size"] == 4
+    assert distributed["proxied"] is True
     assert manager.kernel.kernel_name == "custom-python"
     assert manager.kernel.kernel_spec.argv[1:3] == ["-m", "jupyter_distributed.kernel"]
     assert manager.kernel.kernel_spec.interrupt_mode == "message"
@@ -57,13 +65,14 @@ async def test_switches_between_selected_kernel_and_internal_proxy() -> None:
     assert manager.kernel._launch_args["env"]["JUPYTER_DISTRIBUTED_WORLD_SIZE"] == "4"
     assert manager.kernel._launch_args["env"]["JUPYTER_DISTRIBUTED_CWD"] == "/notebooks"
 
-    direct = await coordinator.set_world_size("kernel-id", 1)
+    single_again = await coordinator.set_world_size("kernel-id", 1)
 
-    assert direct["distributed"] is False
-    assert manager.kernel.kernel_spec.argv == original_argv
-    assert manager.kernel.kernel_spec.interrupt_mode == "signal"
-    assert "env" not in manager.kernel._launch_args
-    assert manager.restarts == 2
+    assert single_again["distributed"] is False
+    assert single_again["proxied"] is True
+    assert manager.kernel.kernel_spec.argv[1:3] == ["-m", "jupyter_distributed.kernel"]
+    assert manager.kernel.kernel_spec.interrupt_mode == "message"
+    assert manager.kernel._launch_args["env"]["JUPYTER_DISTRIBUTED_WORLD_SIZE"] == "1"
+    assert manager.restarts == 3
 
 
 @pytest.mark.asyncio
@@ -86,4 +95,5 @@ async def test_accepts_arbitrary_positive_process_count() -> None:
     model = await coordinator.set_world_size("kernel-id", 257)
 
     assert model["world_size"] == 257
+    assert model["proxied"] is True
     assert manager.kernel._launch_args["env"]["JUPYTER_DISTRIBUTED_WORLD_SIZE"] == "257"

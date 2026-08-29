@@ -7,17 +7,13 @@ import { DisposableDelegate, IDisposable } from '@lumino/disposable';
 import { Widget } from '@lumino/widgets';
 
 const METADATA_KEY = 'jupyter_distributed';
-const SINGLE_PROCESS_RANK_MAGIC_BOOTSTRAP = `
-from jupyter_distributed.rank_magic import register_single_process_rank_magic as _jd_register_rank_magic
-_jd_register_rank_magic(get_ipython())
-del _jd_register_rank_magic
-`.trim();
 
 interface DistributedKernelModel {
   kernel_id: string;
   kernel_name: string;
   world_size: number;
   distributed: boolean;
+  proxied: boolean;
 }
 
 class ProcessSelector extends Widget {
@@ -88,7 +84,7 @@ class ProcessSelector extends Widget {
   private async _syncFromServer(): Promise<void> {
     const kernelId = this._kernelId();
     const request = ++this._syncRequest;
-    let restoring = false;
+    let synchronizing = false;
     if (!kernelId) {
       return;
     }
@@ -99,35 +95,31 @@ class ProcessSelector extends Widget {
         return;
       }
       const savedWorldSize = this._savedWorldSize();
-      if (
-        savedWorldSize === undefined ||
-        savedWorldSize === model.world_size
-      ) {
+      const targetWorldSize = savedWorldSize ?? model.world_size;
+      if (model.proxied && targetWorldSize === model.world_size) {
         this._setWorldSize(model.world_size);
-        await this._ensureSingleProcessRankMagic(model.world_size);
         return;
       }
 
       this._pending = true;
-      restoring = true;
+      synchronizing = true;
       this._syncVisibility();
       const restored = await this._request(kernelId, 'POST', {
-        world_size: savedWorldSize
+        world_size: targetWorldSize
       });
       if (kernelId === this._kernelId()) {
         this._setWorldSize(restored.world_size);
-        await this._ensureSingleProcessRankMagic(restored.world_size);
       }
     } catch (error) {
       // Keep the default value if the server extension is unavailable.
-      if (restoring) {
+      if (synchronizing) {
         await showErrorMessage(
-          'Unable to restore process count',
+          'Unable to configure process count',
           error instanceof Error ? error : String(error)
         );
       }
     } finally {
-      if (restoring) {
+      if (synchronizing) {
         this._pending = false;
         this._syncVisibility();
         if (kernelId !== this._kernelId()) {
@@ -179,9 +171,8 @@ class ProcessSelector extends Widget {
     }
     this._setWorldSize(current.world_size);
 
-    if (next === current.world_size) {
+    if (current.proxied && next === current.world_size) {
       this._saveWorldSize(next);
-      await this._ensureSingleProcessRankMagic(next);
       return current;
     }
 
@@ -212,7 +203,6 @@ class ProcessSelector extends Widget {
       }
       this._setWorldSize(model.world_size);
       this._saveWorldSize(model.world_size);
-      await this._ensureSingleProcessRankMagic(model.world_size);
       return model;
     } finally {
       this._pending = false;
@@ -254,35 +244,6 @@ class ProcessSelector extends Widget {
       model.deleteMetadata(METADATA_KEY);
     } else {
       model.setMetadata(METADATA_KEY, { world_size: worldSize });
-    }
-  }
-
-  private async _ensureSingleProcessRankMagic(worldSize: number): Promise<void> {
-    if (worldSize !== 1) {
-      return;
-    }
-    const kernel = this._panel.sessionContext.session?.kernel;
-    if (!kernel) {
-      return;
-    }
-    try {
-      const info = await kernel.info;
-      if (
-        kernel !== this._panel.sessionContext.session?.kernel ||
-        !info.language_info.name.toLowerCase().startsWith('python')
-      ) {
-        return;
-      }
-      const future = kernel.requestExecute({
-        code: SINGLE_PROCESS_RANK_MAGIC_BOOTSTRAP,
-        silent: true,
-        store_history: false,
-        allow_stdin: false,
-        stop_on_error: false
-      });
-      await future.done;
-    } catch {
-      // The compatibility magic is optional for non-IPython Python kernels.
     }
   }
 

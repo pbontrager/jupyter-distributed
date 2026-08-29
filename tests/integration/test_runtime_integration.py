@@ -194,7 +194,28 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
     client.start_channels()
     try:
         await client.wait_for_ready(timeout=20)
-        assert coordinator.describe("logical-kernel")["world_size"] == 1
+        initial = coordinator.describe("logical-kernel")
+        assert initial["world_size"] == 1
+        assert initial["proxied"] is False
+
+        model = await coordinator.set_world_size("logical-kernel", 1)
+        assert model["proxied"] is True
+        await client.wait_for_ready(timeout=20)
+        reply, data = await execute_through_proxy(
+            client,
+            "import os\n"
+            "required = ['RANK', 'LOCAL_RANK', 'WORLD_SIZE', 'LOCAL_WORLD_SIZE', "
+            "'MASTER_ADDR', 'MASTER_PORT', 'JAX_COORDINATOR_ADDRESS', "
+            "'JAX_PROCESS_ID', 'JAX_NUM_PROCESSES']\n"
+            "all(os.environ.get(name) for name in required) and "
+            "(os.environ['RANK'], os.environ['WORLD_SIZE'], "
+            "os.environ['JAX_PROCESS_ID'], os.environ['JAX_NUM_PROCESSES']) "
+            "== ('0', '1', '0', '1')",
+        )
+        assert reply["status"] == "ok"
+        assert data[RANK_MIME]["world_size"] == 1
+        rank_output = data[RANK_MIME]["ranks"][0]["outputs"][-1]
+        assert rank_output["content"]["data"]["text/plain"] == "True"
 
         model = await coordinator.set_world_size("logical-kernel", 2)
         assert model == {
@@ -202,6 +223,7 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
             "kernel_name": "python3",
             "world_size": 2,
             "distributed": True,
+            "proxied": True,
         }
         assert manager.kernel_name == "python3"
         await client.wait_for_ready(timeout=20)
@@ -605,11 +627,12 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
 
         model = await coordinator.set_world_size("logical-kernel", 1)
         assert model["distributed"] is False
+        assert model["proxied"] is True
         assert manager.kernel_name == "python3"
         await client.wait_for_ready(timeout=20)
         reply, data = await execute_through_proxy(client, "1 + 1")
         assert reply["status"] == "ok"
-        assert data is None
+        assert data[RANK_MIME]["world_size"] == 1
     finally:
         client.stop_channels()
         await manager.shutdown_kernel(now=False)

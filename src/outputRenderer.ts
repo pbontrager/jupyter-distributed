@@ -146,41 +146,47 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
       ? remembered
       : this._ranks[0];
 
-    const tabs = new Widget({ node: document.createElement('div') });
-    tabs.addClass('jp-JupyterDistributedRankOutput-tabs');
-    tabs.node.setAttribute('role', 'tablist');
-    this._tabs = tabs;
-    this.addWidget(tabs);
+    if (ranks.length > 1) {
+      const tabs = new Widget({ node: document.createElement('div') });
+      tabs.addClass('jp-JupyterDistributedRankOutput-tabs');
+      tabs.node.setAttribute('role', 'tablist');
+      this._tabs = tabs;
+      this.addWidget(tabs);
 
-    const picker = new Widget({ node: Private.createRankPickerNode() });
-    picker.addClass('jp-JupyterDistributedRankOutput-picker');
-    this._rankSelect = picker.node.querySelector('select')!;
-    this._rankSelect.addEventListener('change', this._onDropdownChange);
-    this.addWidget(picker);
+      const picker = new Widget({ node: Private.createRankPickerNode() });
+      picker.addClass('jp-JupyterDistributedRankOutput-picker');
+      this._rankSelect = picker.node.querySelector('select')!;
+      this._rankSelect.addEventListener('change', this._onDropdownChange);
+      this.addWidget(picker);
+    }
 
     for (const rank of ranks) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.textContent = `Rank ${rank.rank}`;
-      button.dataset.rank = String(rank.rank);
-      button.className = 'jp-JupyterDistributedRankOutput-tab';
-      button.setAttribute('role', 'tab');
-      if (rank.error) {
-        button.classList.add('jp-mod-error');
-        button.title = `Rank ${rank.rank} produced an error`;
+      if (this._tabs) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = `Rank ${rank.rank}`;
+        button.dataset.rank = String(rank.rank);
+        button.className = 'jp-JupyterDistributedRankOutput-tab';
+        button.setAttribute('role', 'tab');
+        if (rank.error) {
+          button.classList.add('jp-mod-error');
+          button.title = `Rank ${rank.rank} produced an error`;
+        }
+        button.addEventListener('click', () => {
+          this._selections.set(this._executionId, rank.rank);
+          this._select(rank.rank);
+        });
+        this._tabs.node.appendChild(button);
       }
-      button.addEventListener('click', () => {
-        this._selections.set(this._executionId, rank.rank);
-        this._select(rank.rank);
-      });
-      tabs.node.appendChild(button);
 
-      const option = document.createElement('option');
-      option.value = String(rank.rank);
-      option.textContent = rank.error
-        ? `Rank ${rank.rank} — error`
-        : `Rank ${rank.rank}`;
-      this._rankSelect.appendChild(option);
+      if (this._rankSelect) {
+        const option = document.createElement('option');
+        option.value = String(rank.rank);
+        option.textContent = rank.error
+          ? `Rank ${rank.rank} — error`
+          : `Rank ${rank.rank}`;
+        this._rankSelect.appendChild(option);
+      }
 
       const content = new Panel();
       content.addClass('jp-JupyterDistributedRankOutput-rank');
