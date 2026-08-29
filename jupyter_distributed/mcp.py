@@ -46,11 +46,11 @@ async def get_distributed_notebook_info(
     Call this before reasoning about execution. With more than one process,
     ordinary cells run on every persistent rank using SPMD semantics and each
     rank has independent state. Use ``%%rank N`` for rank-local analysis and
-    ``read_distributed_cell_outputs`` to inspect every rank. Rank identity is
-    available directly through the ``RANK`` and ``WORLD_SIZE`` environment
-    variables; no framework initialization is needed to read it. To change the
-    process count, call ``set_distributed_processes``; do not edit notebook
-    metadata or use a generic kernel restart operation.
+    ``read_distributed_cell_outputs`` to inspect every rank. The current rank
+    and process count are available through the ``RANK`` and ``WORLD_SIZE``
+    environment variables. To change the process count, call
+    ``set_distributed_processes``; do not edit notebook metadata or use a
+    generic kernel restart operation.
     """
     path = await _notebook_path(notebook_path)
     server = _server_app()
@@ -424,33 +424,30 @@ def _saved_world_size(document: Mapping[str, Any]) -> int:
 def _process_environment(*, active: bool) -> dict[str, Any]:
     return {
         "active": active,
+        "execution_model": (
+            "Ordinary cells execute on every persistent process using SPMD semantics. "
+            "Each process has independent state."
+        ),
         "rank": "RANK",
         "world_size": "WORLD_SIZE",
-        "provided_variables": [
-            "RANK",
-            "LOCAL_RANK",
-            "WORLD_SIZE",
-            "LOCAL_WORLD_SIZE",
-            "MASTER_ADDR",
-            "MASTER_PORT",
-            "JAX_COORDINATOR_ADDRESS",
-            "JAX_PROCESS_ID",
-            "JAX_NUM_PROCESSES",
-        ],
-        "framework_compatibility": {
-            "pytorch": ["RANK", "WORLD_SIZE", "MASTER_ADDR", "MASTER_PORT"],
+        "framework_convenience_variables": {
+            "pytorch": [
+                "RANK",
+                "LOCAL_RANK",
+                "WORLD_SIZE",
+                "LOCAL_WORLD_SIZE",
+                "MASTER_ADDR",
+                "MASTER_PORT",
+            ],
             "jax": [
                 "JAX_COORDINATOR_ADDRESS",
                 "JAX_PROCESS_ID",
                 "JAX_NUM_PROCESSES",
             ],
         },
-        "guidance": (
-            "For generic SPMD code, read RANK and WORLD_SIZE directly from the process "
-            "environment (for example, int(os.environ['RANK']) in Python). Do not import "
-            "or initialize PyTorch, JAX, or another distributed framework unless the user "
-            "requests it or the notebook code requires its collectives. Do not recreate "
-            "these variables unless the user intentionally wants to override a default."
+        "framework_note": (
+            "When the notebook uses PyTorch or JAX distributed APIs, these convenience "
+            "variables are already present, so separate environment setup is unnecessary."
         ),
     }
 

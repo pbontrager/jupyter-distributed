@@ -86,33 +86,30 @@ async def test_reports_live_distributed_notebook_info(
         },
         "process_environment": {
             "active": True,
+            "execution_model": (
+                "Ordinary cells execute on every persistent process using SPMD semantics. "
+                "Each process has independent state."
+            ),
             "rank": "RANK",
             "world_size": "WORLD_SIZE",
-            "provided_variables": [
-                "RANK",
-                "LOCAL_RANK",
-                "WORLD_SIZE",
-                "LOCAL_WORLD_SIZE",
-                "MASTER_ADDR",
-                "MASTER_PORT",
-                "JAX_COORDINATOR_ADDRESS",
-                "JAX_PROCESS_ID",
-                "JAX_NUM_PROCESSES",
-            ],
-            "framework_compatibility": {
-                "pytorch": ["RANK", "WORLD_SIZE", "MASTER_ADDR", "MASTER_PORT"],
+            "framework_convenience_variables": {
+                "pytorch": [
+                    "RANK",
+                    "LOCAL_RANK",
+                    "WORLD_SIZE",
+                    "LOCAL_WORLD_SIZE",
+                    "MASTER_ADDR",
+                    "MASTER_PORT",
+                ],
                 "jax": [
                     "JAX_COORDINATOR_ADDRESS",
                     "JAX_PROCESS_ID",
                     "JAX_NUM_PROCESSES",
                 ],
             },
-            "guidance": (
-                "For generic SPMD code, read RANK and WORLD_SIZE directly from the process "
-                "environment (for example, int(os.environ['RANK']) in Python). Do not import "
-                "or initialize PyTorch, JAX, or another distributed framework unless the user "
-                "requests it or the notebook code requires its collectives. Do not recreate "
-                "these variables unless the user intentionally wants to override a default."
+            "framework_note": (
+                "When the notebook uses PyTorch or JAX distributed APIs, these convenience "
+                "variables are already present, so separate environment setup is unnecessary."
             ),
         },
     }
