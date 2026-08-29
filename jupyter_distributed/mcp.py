@@ -19,7 +19,6 @@ TOOLS = [
     "jupyter_ai_tools.toolkits.notebook:read_notebook",
     "jupyter_ai_tools.toolkits.notebook:read_notebook_cells",
     "jupyter_ai_tools.toolkits.notebook:read_cell",
-    "jupyter_ai_tools.toolkits.notebook:add_cell",
     "jupyter_ai_tools.toolkits.notebook:insert_cell",
     "jupyter_ai_tools.toolkits.notebook:delete_cell",
     "jupyter_ai_tools.toolkits.notebook:edit_cell",
@@ -33,8 +32,8 @@ TOOLS = [
     "jupyter_distributed.mcp:get_distributed_notebook_info",
     "jupyter_distributed.mcp:read_distributed_cell_outputs",
     "jupyter_distributed.mcp:get_selected_notebook_cell",
-    "jupyter_distributed.mcp:append_execute_distributed_cell",
-    "jupyter_distributed.mcp:run_distributed_cell",
+    "jupyter_distributed.mcp:append_cell",
+    "jupyter_distributed.mcp:run_cell",
     "jupyter_distributed.mcp:set_distributed_processes",
     "jupyter_distributed.mcp:select_distributed_debug_rank",
 ]
@@ -150,15 +149,20 @@ async def get_selected_notebook_cell() -> dict[str, Any]:
     }
 
 
-async def append_execute_distributed_cell(source: str) -> dict[str, Any]:
-    """Write a bottom code cell and execute it through the notebook frontend.
+async def append_cell(source: str, cell_type: str = "code") -> dict[str, Any]:
+    """Write a cell at the bottom of the open notebook.
 
     The first empty cell in the trailing run of blank cells is reused; a new
-    cell is appended only when the notebook ends with content. Ordinary source
-    runs on every rank. Prefix it with ``%%rank N`` to target one rank. To fix
-    or retry this code, edit the returned ``cell_id`` and call
-    ``run_distributed_cell`` on that same cell instead of appending another.
+    cell is appended only when the notebook ends with content. Use ``run_cell``
+    with the returned ``cell_id`` when execution is requested. Use
+    ``insert_cell`` instead when the location is not the bottom of the notebook.
+
+    Prefer this dedicated MCP tool over the raw
+    ``jupyterlab-ai-commands:add-cell`` command.
     """
+    if cell_type not in {"code", "markdown", "raw"}:
+        raise ValueError("cell_type must be code, markdown, or raw")
+
     from jupyter_ai_tools.toolkits.notebook import add_cell, edit_cell, read_notebook_json
 
     path = await _notebook_path(None)
@@ -169,9 +173,9 @@ async def append_execute_distributed_cell(source: str) -> dict[str, Any]:
     reused_blank_cell = target is not None
     if target is not None:
         cell_index, cell_id = target
-        await edit_cell(notebook_path, cell_id, content=source, cell_type="code")
+        await edit_cell(notebook_path, cell_id, content=source, cell_type=cell_type)
     else:
-        await add_cell(notebook_path, content=source, cell_type="code")
+        await add_cell(notebook_path, content=source, cell_type=cell_type)
         document = await read_notebook_json(notebook_path)
         cells = document.get("cells", [])
         if not cells or not isinstance(cells[-1], Mapping):
@@ -180,30 +184,30 @@ async def append_execute_distributed_cell(source: str) -> dict[str, Any]:
         cell_id = cells[cell_index].get("id")
     if not isinstance(cell_id, str):
         raise RuntimeError("The bottom notebook cell has no id")
-    result = await run_distributed_cell(cell_id, notebook_path)
     return {
         "notebook_path": notebook_path,
         "cell_id": cell_id,
         "cell_index": cell_index,
         "reused_blank_cell": reused_blank_cell,
-        "execution": result,
     }
 
 
-async def run_distributed_cell(
+async def run_cell(
     cell_id: str,
     notebook_path: str | None = None,
 ) -> dict[str, Any]:
     """Run one existing cell and verify its distributed rank aggregation.
 
-    Use this instead of the generic ``run_cell`` tool in a Jupyter Distributed
+    This is the canonical MCP execution tool for a Jupyter Distributed
     notebook. User-code failures are reported from the completed rank payload.
     If Jupyter reports success but the rank payload is missing or incomplete,
     the result is classified as an extension error: do not rewrite or duplicate
     the cell while diagnosing it. Edit and rerun the same ``cell_id`` whenever
-    the source itself needs correction.
+    the source itself needs correction. Prefer this tool over the raw
+    ``jupyterlab-ai-commands:run-cell`` command returned by
+    ``list_all_commands``.
     """
-    from jupyter_ai_tools.toolkits.jupyterlab import run_cell
+    from jupyter_ai_tools.toolkits.jupyterlab import run_cell as upstream_run_cell
 
     path = await _notebook_path(notebook_path)
     relative_path = _relative_notebook_path(_server_app(), path)
@@ -216,7 +220,7 @@ async def run_distributed_cell(
         if isinstance(execution, Mapping)
     }
 
-    execution = await run_cell(cell_id, file_path=relative_path)
+    execution = await upstream_run_cell(cell_id, file_path=relative_path)
     if _tool_pending(execution):
         return {
             "success": True,
@@ -301,8 +305,9 @@ async def set_distributed_processes(
     distributed process group correctly. This tool performs the coordinated
     restart and updates the notebook's Processes control and saved metadata.
     All in-memory kernel state is lost. After this returns, use
-    ``run_distributed_cell`` or ``append_execute_distributed_cell``; the process
-    tool already performed the required restart, so do not restart again.
+    ``run_cell`` for an existing cell, or ``append_cell`` followed by
+    ``run_cell`` for new work. The process tool already performed the required
+    restart, so do not restart again.
     """
     if isinstance(processes, bool) or not isinstance(processes, int) or processes < 1:
         raise ValueError("processes must be a positive integer")
@@ -447,11 +452,19 @@ def _process_control() -> dict[str, Any]:
 
 def _cell_workflow() -> dict[str, Any]:
     return {
-        "new_bottom_cell_tool": "append_execute_distributed_cell",
+        "tool_preference": (
+            "Prefer dedicated MCP tools. Use list_all_commands and execute_command only "
+            "when no dedicated MCP tool covers the operation."
+        ),
+        "new_bottom_cell_tool": "append_cell",
         "reuses_first_trailing_blank_cell": True,
-        "run_existing_cell_tool": "run_distributed_cell",
-        "retry_in_place": ["edit_cell", "run_distributed_cell"],
+        "run_existing_cell_tool": "run_cell",
+        "retry_in_place": ["edit_cell", "run_cell"],
         "do_not_append_replacement_cells_when_debugging": True,
+        "superseded_raw_commands": [
+            "jupyterlab-ai-commands:add-cell",
+            "jupyterlab-ai-commands:run-cell",
+        ],
     }
 
 
@@ -537,7 +550,7 @@ def _tool_pending(result: Any) -> bool:
 def _same_cell_guidance(cell_id: str) -> str:
     return (
         f"Keep cell_id={cell_id}. If its source needs correction, edit that cell in place "
-        "and call run_distributed_cell with the same cell_id; do not append a replacement."
+        "and call run_cell with the same cell_id; do not append a replacement."
     )
 
 
@@ -600,11 +613,11 @@ def _text(value: Any) -> str | None:
 
 __all__ = [
     "TOOLS",
-    "append_execute_distributed_cell",
+    "append_cell",
     "get_distributed_notebook_info",
     "get_selected_notebook_cell",
     "read_distributed_cell_outputs",
-    "run_distributed_cell",
+    "run_cell",
     "set_distributed_processes",
     "select_distributed_debug_rank",
 ]
