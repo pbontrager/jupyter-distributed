@@ -62,6 +62,7 @@ class _LiveRankDisplay:
         self._execution_count = execution_count
         self._cell_id = cell_id
         self._execution_id = uuid4().hex
+        self._display_id = f"jupyter-distributed-{self._execution_id}"
         self._outputs: dict[int, tuple[RankOutput, ...]] = {
             rank: () for rank in range(kernel.group.world_size)
         }
@@ -79,7 +80,7 @@ class _LiveRankDisplay:
             self._started = True
             payload = self._live_payload()
             snapshot = self._snapshot(payload)
-            self._send_display(snapshot["data"])
+            self._send_display("display_data", snapshot["data"])
             self._kernel.live_updates.publish(snapshot)
             return
         if self._flush_task is not None:
@@ -98,11 +99,13 @@ class _LiveRankDisplay:
         payload = execution.as_dict()
         payload["execution_id"] = self._execution_id
         if self._started:
-            self._kernel.live_updates.publish(self._snapshot(payload, execution=execution))
+            snapshot = self._snapshot(payload, execution=execution)
+            self._send_display("update_display_data", snapshot["data"])
+            self._kernel.live_updates.publish(snapshot)
         else:
             self._started = True
             snapshot = self._snapshot(payload, execution=execution)
-            self._send_display(snapshot["data"])
+            self._send_display("display_data", snapshot["data"])
             self._kernel.live_updates.publish(snapshot)
 
     async def _flush_after(self, delay: float) -> None:
@@ -157,13 +160,18 @@ class _LiveRankDisplay:
             "metadata": {},
         }
 
-    def _send_display(self, data: Mapping[str, Any]) -> None:
+    def _send_display(
+        self,
+        message_type: str,
+        data: Mapping[str, Any],
+    ) -> None:
         self._kernel.send_response(
             self._kernel.iopub_socket,
-            "display_data",
+            message_type,
             {
                 "data": dict(data),
                 "metadata": {},
+                "transient": {"display_id": self._display_id},
             },
         )
         self._last_sent = asyncio.get_running_loop().time()

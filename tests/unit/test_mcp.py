@@ -75,8 +75,10 @@ async def test_reports_live_distributed_notebook_info(
             "new_bottom_cell_tool": "append_cell",
             "reuses_first_trailing_blank_cell": True,
             "run_existing_cell_tool": "run_cell",
-            "retry_in_place": ["edit_cell", "run_cell"],
-            "do_not_append_replacement_cells_when_debugging": True,
+            "editing_preference": (
+                "When debugging or revising an existing cell, prefer editing that cell in place. "
+                "Add a new cell for conceptually new work."
+            ),
             "superseded_raw_commands": [
                 "jupyterlab-ai-commands:add-cell",
                 "jupyterlab-ai-commands:run-cell",
@@ -399,7 +401,7 @@ async def test_run_cell_classifies_incomplete_aggregation_as_extension_error(
     assert result["success"] is False
     assert result["classification"] == "jupyter_distributed_error"
     assert "not evidence that the cell source is wrong" in result["message"]
-    assert "do not append a replacement" in result["recommended_action"]
+    assert "recommended_action" not in result
 
 
 @pytest.mark.asyncio

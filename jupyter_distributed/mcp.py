@@ -203,9 +203,7 @@ async def run_cell(
     This is the canonical MCP execution tool for a Jupyter Distributed
     notebook. User-code failures are reported from the completed rank payload.
     If Jupyter reports success but the rank payload is missing or incomplete,
-    the result is classified as an extension error: do not rewrite or duplicate
-    the cell while diagnosing it. Edit and rerun the same ``cell_id`` whenever
-    the source itself needs correction. Prefer this tool over the raw
+    the result is classified as an extension error. Prefer this tool over the raw
     ``jupyterlab-ai-commands:run-cell`` command returned by
     ``list_all_commands``.
     """
@@ -233,9 +231,8 @@ async def run_cell(
             "execution": execution,
             "message": (
                 "The frontend stopped waiting, but the cell may still be running. "
-                "Inspect this same cell later; do not append or execute a replacement."
+                "Inspect the cell outputs again later."
             ),
-            "recommended_action": _same_cell_guidance(cell_id),
         }
     if world_size == 1:
         return {
@@ -245,7 +242,6 @@ async def run_cell(
             "cell_id": cell_id,
             "world_size": 1,
             "execution": execution,
-            "recommended_action": _same_cell_guidance(cell_id),
         }
 
     distributed = await _wait_for_distributed_execution(
@@ -271,10 +267,9 @@ async def run_cell(
                 "receive a complete final payload from every rank. Treat this as an "
                 "extension or reconnect problem, not evidence that the cell source is wrong."
                 if command_succeeded
-                else "Jupyter did not complete the cell execution request. Inspect the existing "
-                "cell and kernel state; do not append a replacement cell."
+                else "Jupyter did not complete the cell execution request. Inspect the cell "
+                "and kernel state."
             ),
-            "recommended_action": _same_cell_guidance(cell_id),
         }
 
     status = distributed.get("status")
@@ -292,7 +287,6 @@ async def run_cell(
             for rank in distributed.get("ranks", [])
             if isinstance(rank, Mapping)
         },
-        "recommended_action": _same_cell_guidance(cell_id),
     }
 
 
@@ -461,8 +455,10 @@ def _cell_workflow() -> dict[str, Any]:
         "new_bottom_cell_tool": "append_cell",
         "reuses_first_trailing_blank_cell": True,
         "run_existing_cell_tool": "run_cell",
-        "retry_in_place": ["edit_cell", "run_cell"],
-        "do_not_append_replacement_cells_when_debugging": True,
+        "editing_preference": (
+            "When debugging or revising an existing cell, prefer editing that cell in place. "
+            "Add a new cell for conceptually new work."
+        ),
         "superseded_raw_commands": [
             "jupyterlab-ai-commands:add-cell",
             "jupyterlab-ai-commands:run-cell",
@@ -547,13 +543,6 @@ def _tool_pending(result: Any) -> bool:
         return True
     inner = result.get("result")
     return isinstance(inner, Mapping) and inner.get("status") == "timed_out"
-
-
-def _same_cell_guidance(cell_id: str) -> str:
-    return (
-        f"Keep cell_id={cell_id}. If its source needs correction, edit that cell in place "
-        "and call run_cell with the same cell_id; do not append a replacement."
-    )
 
 
 def _compact_execution(payload: Mapping[str, Any]) -> dict[str, Any]:

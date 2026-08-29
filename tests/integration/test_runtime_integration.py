@@ -504,8 +504,13 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
         assert saw_live_output
         assert final_snapshot is not None
         assert final_snapshot["data"][RANK_MIME]["status"] == "ok"
-        assert [message["msg_type"] for message in output_messages] == ["display_data"]
+        assert [message["msg_type"] for message in output_messages] == [
+            "display_data",
+            "update_display_data",
+        ]
         assert output_messages[0]["content"]["data"][RANK_MIME]["status"] == "busy"
+        assert output_messages[-1]["content"]["data"][RANK_MIME]["status"] == "ok"
+        assert len(output_messages[-1]["content"]["data"][RANK_MIME]["ranks"]) == 2
 
         reconnect_comm_id = open_rank_update_comm(client)
         restored_message = await iopub_message(
