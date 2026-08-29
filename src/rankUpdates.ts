@@ -108,12 +108,18 @@ export class RankUpdateComm implements IDisposable {
     }
 
     try {
-      const info = await kernel.info;
+      // The logical kernel ID is retained when process count changes, while
+      // `kernel.info` may still contain the pre-restart implementation.
+      const infoReply = await kernel.requestKernelInfo();
+      const implementation =
+        infoReply && 'implementation' in infoReply.content
+          ? infoReply.content.implementation
+          : null;
       if (
         request !== this._request ||
         this._disposed ||
         kernel !== this._panel.sessionContext.session?.kernel ||
-        info.implementation !== 'jupyter_distributed'
+        implementation !== 'jupyter_distributed'
       ) {
         return;
       }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from collections.abc import Mapping
 from pathlib import Path
@@ -28,12 +29,12 @@ TOOLS = [
     "jupyter_ai_tools.toolkits.notebook:get_active_cell_id",
     "jupyter_ai_tools.toolkits.notebook:create_notebook",
     "jupyter_ai_tools.toolkits.jupyterlab:open_file",
-    "jupyter_ai_tools.toolkits.jupyterlab:run_cell",
     "jupyter_ai_tools.toolkits.jupyterlab:run_all_cells",
     "jupyter_distributed.mcp:get_distributed_notebook_info",
     "jupyter_distributed.mcp:read_distributed_cell_outputs",
     "jupyter_distributed.mcp:get_selected_notebook_cell",
     "jupyter_distributed.mcp:append_execute_distributed_cell",
+    "jupyter_distributed.mcp:run_distributed_cell",
     "jupyter_distributed.mcp:set_distributed_processes",
     "jupyter_distributed.mcp:select_distributed_debug_rank",
 ]
@@ -75,6 +76,7 @@ async def get_distributed_notebook_info(
                 "distributed": model["distributed"],
                 "world_size_source": "live_kernel",
                 "process_control": _process_control(),
+                "cell_workflow": _cell_workflow(),
                 "framework_environment": _framework_environment(distributed=model["distributed"]),
             }
 
@@ -87,6 +89,7 @@ async def get_distributed_notebook_info(
         "distributed": world_size > 1,
         "world_size_source": "notebook_metadata" if world_size > 1 else "default",
         "process_control": _process_control(),
+        "cell_workflow": _cell_workflow(),
         "framework_environment": _framework_environment(distributed=world_size > 1),
     }
 
@@ -148,31 +151,142 @@ async def get_selected_notebook_cell() -> dict[str, Any]:
 
 
 async def append_execute_distributed_cell(source: str) -> dict[str, Any]:
-    """Append and execute a code cell through the open notebook frontend.
+    """Write a bottom code cell and execute it through the notebook frontend.
 
-    Ordinary source runs on every rank. Prefix the source with ``%%rank N`` to
-    target one rank. Execution follows the notebook's normal frontend path so
-    live rank outputs, widgets, and existing kernel state are preserved.
+    The first empty cell in the trailing run of blank cells is reused; a new
+    cell is appended only when the notebook ends with content. Ordinary source
+    runs on every rank. Prefix it with ``%%rank N`` to target one rank. To fix
+    or retry this code, edit the returned ``cell_id`` and call
+    ``run_distributed_cell`` on that same cell instead of appending another.
     """
-    from jupyter_ai_tools.toolkits.jupyterlab import run_cell
-    from jupyter_ai_tools.toolkits.notebook import add_cell, read_notebook_json
+    from jupyter_ai_tools.toolkits.notebook import add_cell, edit_cell, read_notebook_json
 
     path = await _notebook_path(None)
     notebook_path = _relative_notebook_path(_server_app(), path)
-    await add_cell(notebook_path, content=source, cell_type="code")
     document = await read_notebook_json(notebook_path)
     cells = document.get("cells", [])
-    if not cells or not isinstance(cells[-1], Mapping):
-        raise RuntimeError("The appended notebook cell could not be found")
-    cell_id = cells[-1].get("id")
+    target = _first_trailing_blank_cell(cells)
+    reused_blank_cell = target is not None
+    if target is not None:
+        cell_index, cell_id = target
+        await edit_cell(notebook_path, cell_id, content=source, cell_type="code")
+    else:
+        await add_cell(notebook_path, content=source, cell_type="code")
+        document = await read_notebook_json(notebook_path)
+        cells = document.get("cells", [])
+        if not cells or not isinstance(cells[-1], Mapping):
+            raise RuntimeError("The appended notebook cell could not be found")
+        cell_index = len(cells) - 1
+        cell_id = cells[cell_index].get("id")
     if not isinstance(cell_id, str):
-        raise RuntimeError("The appended notebook cell has no id")
-    result = await run_cell(cell_id, file_path=notebook_path)
+        raise RuntimeError("The bottom notebook cell has no id")
+    result = await run_distributed_cell(cell_id, notebook_path)
     return {
         "notebook_path": notebook_path,
         "cell_id": cell_id,
-        "cell_index": len(cells) - 1,
+        "cell_index": cell_index,
+        "reused_blank_cell": reused_blank_cell,
         "execution": result,
+    }
+
+
+async def run_distributed_cell(
+    cell_id: str,
+    notebook_path: str | None = None,
+) -> dict[str, Any]:
+    """Run one existing cell and verify its distributed rank aggregation.
+
+    Use this instead of the generic ``run_cell`` tool in a Jupyter Distributed
+    notebook. User-code failures are reported from the completed rank payload.
+    If Jupyter reports success but the rank payload is missing or incomplete,
+    the result is classified as an extension error: do not rewrite or duplicate
+    the cell while diagnosing it. Edit and rerun the same ``cell_id`` whenever
+    the source itself needs correction.
+    """
+    from jupyter_ai_tools.toolkits.jupyterlab import run_cell
+
+    path = await _notebook_path(notebook_path)
+    relative_path = _relative_notebook_path(_server_app(), path)
+    info = await get_distributed_notebook_info(relative_path)
+    world_size = int(info["world_size"])
+    previous = await read_distributed_cell_outputs(cell_id, relative_path)
+    previous_ids = {
+        execution.get("execution_id")
+        for execution in previous["executions"]
+        if isinstance(execution, Mapping)
+    }
+
+    execution = await run_cell(cell_id, file_path=relative_path)
+    if _tool_pending(execution):
+        return {
+            "success": True,
+            "classification": "execution_pending",
+            "notebook_path": relative_path,
+            "cell_id": cell_id,
+            "world_size": world_size,
+            "execution": execution,
+            "message": (
+                "The frontend stopped waiting, but the cell may still be running. "
+                "Inspect this same cell later; do not append or execute a replacement."
+            ),
+            "recommended_action": _same_cell_guidance(cell_id),
+        }
+    if world_size == 1:
+        return {
+            "success": _tool_succeeded(execution),
+            "classification": "ok" if _tool_succeeded(execution) else "execution_error",
+            "notebook_path": relative_path,
+            "cell_id": cell_id,
+            "world_size": 1,
+            "execution": execution,
+            "recommended_action": _same_cell_guidance(cell_id),
+        }
+
+    distributed = await _wait_for_distributed_execution(
+        cell_id,
+        relative_path,
+        previous_ids,
+        world_size,
+    )
+    if distributed is None or not _execution_complete(distributed, world_size):
+        command_succeeded = _tool_succeeded(execution)
+        return {
+            "success": False,
+            "classification": (
+                "jupyter_distributed_error" if command_succeeded else "execution_error"
+            ),
+            "notebook_path": relative_path,
+            "cell_id": cell_id,
+            "world_size": world_size,
+            "execution": execution,
+            "distributed_execution": distributed,
+            "message": (
+                "Jupyter reported that the cell ran, but Jupyter Distributed did not "
+                "receive a complete final payload from every rank. Treat this as an "
+                "extension or reconnect problem, not evidence that the cell source is wrong."
+                if command_succeeded
+                else "Jupyter did not complete the cell execution request. Inspect the existing "
+                "cell and kernel state; do not append a replacement cell."
+            ),
+            "recommended_action": _same_cell_guidance(cell_id),
+        }
+
+    status = distributed.get("status")
+    classification = "ok" if status == "ok" else "user_code_error"
+    return {
+        "success": status == "ok" and _tool_succeeded(execution),
+        "classification": classification,
+        "notebook_path": relative_path,
+        "cell_id": cell_id,
+        "world_size": world_size,
+        "execution": execution,
+        "distributed_execution": distributed,
+        "rank_output_counts": {
+            str(rank.get("rank")): len(rank.get("outputs", []))
+            for rank in distributed.get("ranks", [])
+            if isinstance(rank, Mapping)
+        },
+        "recommended_action": _same_cell_guidance(cell_id),
     }
 
 
@@ -186,8 +300,9 @@ async def set_distributed_processes(
     call Jupyter's generic restart endpoint: neither operation configures the
     distributed process group correctly. This tool performs the coordinated
     restart and updates the notebook's Processes control and saved metadata.
-    All in-memory kernel state is lost. After this returns, cells may be run
-    normally with ``run_cell`` or ``append_execute_distributed_cell``.
+    All in-memory kernel state is lost. After this returns, use
+    ``run_distributed_cell`` or ``append_execute_distributed_cell``; the process
+    tool already performed the required restart, so do not restart again.
     """
     if isinstance(processes, bool) or not isinstance(processes, int) or processes < 1:
         raise ValueError("processes must be a positive integer")
@@ -330,6 +445,102 @@ def _process_control() -> dict[str, Any]:
     }
 
 
+def _cell_workflow() -> dict[str, Any]:
+    return {
+        "new_bottom_cell_tool": "append_execute_distributed_cell",
+        "reuses_first_trailing_blank_cell": True,
+        "run_existing_cell_tool": "run_distributed_cell",
+        "retry_in_place": ["edit_cell", "run_distributed_cell"],
+        "do_not_append_replacement_cells_when_debugging": True,
+    }
+
+
+def _first_trailing_blank_cell(cells: Any) -> tuple[int, str] | None:
+    if not isinstance(cells, list):
+        return None
+    last_content = -1
+    for index, cell in enumerate(cells):
+        if isinstance(cell, Mapping) and _source_text(cell.get("source")).strip():
+            last_content = index
+    target_index = last_content + 1
+    if target_index >= len(cells):
+        return None
+    target = cells[target_index]
+    if not isinstance(target, Mapping) or _source_text(target.get("source")).strip():
+        return None
+    cell_id = target.get("id")
+    return (target_index, cell_id) if isinstance(cell_id, str) else None
+
+
+def _source_text(source: Any) -> str:
+    if isinstance(source, list):
+        return "".join(str(part) for part in source)
+    return "" if source is None else str(source)
+
+
+async def _wait_for_distributed_execution(
+    cell_id: str,
+    notebook_path: str,
+    previous_ids: set[Any],
+    world_size: int,
+    timeout: float = 5.0,
+) -> Mapping[str, Any] | None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    latest = None
+    while True:
+        outputs = await read_distributed_cell_outputs(cell_id, notebook_path)
+        executions = outputs.get("executions", [])
+        candidates = [
+            execution
+            for execution in executions
+            if isinstance(execution, Mapping) and execution.get("execution_id") not in previous_ids
+        ]
+        if candidates:
+            latest = candidates[-1]
+            if _execution_complete(latest, world_size):
+                return latest
+        if asyncio.get_running_loop().time() >= deadline:
+            return latest
+        await asyncio.sleep(0.1)
+
+
+def _execution_complete(execution: Mapping[str, Any], world_size: int) -> bool:
+    ranks = execution.get("ranks", [])
+    return (
+        execution.get("status") in {"ok", "error", "aborted"}
+        and execution.get("world_size") == world_size
+        and isinstance(ranks, list)
+        and len(ranks) == world_size
+        and all(
+            isinstance(rank, Mapping) and rank.get("status") in {"ok", "error", "aborted"}
+            for rank in ranks
+        )
+    )
+
+
+def _tool_succeeded(result: Any) -> bool:
+    if not isinstance(result, Mapping) or not result.get("success", False):
+        return False
+    inner = result.get("result")
+    return not isinstance(inner, Mapping) or inner.get("success", True) is True
+
+
+def _tool_pending(result: Any) -> bool:
+    if not isinstance(result, Mapping):
+        return False
+    if result.get("status") == "timed_out":
+        return True
+    inner = result.get("result")
+    return isinstance(inner, Mapping) and inner.get("status") == "timed_out"
+
+
+def _same_cell_guidance(cell_id: str) -> str:
+    return (
+        f"Keep cell_id={cell_id}. If its source needs correction, edit that cell in place "
+        "and call run_distributed_cell with the same cell_id; do not append a replacement."
+    )
+
+
 def _compact_execution(payload: Mapping[str, Any]) -> dict[str, Any]:
     ranks = payload.get("ranks", [])
     return {
@@ -393,6 +604,7 @@ __all__ = [
     "get_distributed_notebook_info",
     "get_selected_notebook_cell",
     "read_distributed_cell_outputs",
+    "run_distributed_cell",
     "set_distributed_processes",
     "select_distributed_debug_rank",
 ]

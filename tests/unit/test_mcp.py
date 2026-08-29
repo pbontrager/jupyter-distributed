@@ -66,6 +66,13 @@ async def test_reports_live_distributed_notebook_info(
             "do_not_edit_notebook_metadata": True,
             "do_not_use_generic_kernel_restart": True,
         },
+        "cell_workflow": {
+            "new_bottom_cell_tool": "append_execute_distributed_cell",
+            "reuses_first_trailing_blank_cell": True,
+            "run_existing_cell_tool": "run_distributed_cell",
+            "retry_in_place": ["edit_cell", "run_distributed_cell"],
+            "do_not_append_replacement_cells_when_debugging": True,
+        },
         "framework_environment": {
             "active": True,
             "provided_when_distributed": {
@@ -235,18 +242,18 @@ async def test_appends_and_executes_cell(tmp_path: Path, monkeypatch: pytest.Mon
     async def read_notebook(_path: str) -> dict[str, Any]:
         return {"cells": [{"id": "new-cell", "source": "model(dummy)"}]}
 
-    async def run_cell(cell_id: str, *, file_path: str) -> dict[str, Any]:
-        calls.append(("run", (cell_id, file_path)))
+    async def run_cell(cell_id: str, notebook_path: str) -> dict[str, Any]:
+        assert notebook_path == "demo.ipynb"
+        calls.append(("run", (cell_id, notebook_path)))
         return {"success": True}
 
-    import jupyter_ai_tools.toolkits.jupyterlab
     import jupyter_ai_tools.toolkits.notebook
 
     monkeypatch.setattr(mcp, "_server_app", lambda: FakeServer(str(tmp_path)))
     monkeypatch.setattr(mcp, "_notebook_path", lambda _path: _async_value(tmp_path / "demo.ipynb"))
     monkeypatch.setattr(jupyter_ai_tools.toolkits.notebook, "add_cell", add_cell)
     monkeypatch.setattr(jupyter_ai_tools.toolkits.notebook, "read_notebook_json", read_notebook)
-    monkeypatch.setattr(jupyter_ai_tools.toolkits.jupyterlab, "run_cell", run_cell)
+    monkeypatch.setattr(mcp, "run_distributed_cell", run_cell)
 
     result = await mcp.append_execute_distributed_cell("model(dummy)")
 
@@ -254,12 +261,152 @@ async def test_appends_and_executes_cell(tmp_path: Path, monkeypatch: pytest.Mon
         "notebook_path": "demo.ipynb",
         "cell_id": "new-cell",
         "cell_index": 0,
+        "reused_blank_cell": False,
         "execution": {"success": True},
     }
     assert calls == [
         ("add", ("demo.ipynb", "model(dummy)", "code")),
         ("run", ("new-cell", "demo.ipynb")),
     ]
+
+
+@pytest.mark.asyncio
+async def test_reuses_first_cell_in_trailing_blank_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, Any]] = []
+    cells = [
+        {"id": "0", "source": "first"},
+        {"id": "1", "source": "second"},
+        {"id": "2", "source": ""},
+        {"id": "3", "source": "fourth"},
+        {"id": "4", "source": ""},
+        {"id": "5", "source": ["  ", "\n"]},
+        {"id": "6", "source": ""},
+    ]
+
+    async def read_notebook(_path: str) -> dict[str, Any]:
+        return {"cells": cells}
+
+    async def add_cell(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("a new cell should not be appended")
+
+    async def edit_cell(
+        path: str,
+        cell_id: str,
+        *,
+        content: str,
+        cell_type: str,
+    ) -> None:
+        calls.append(("edit", (path, cell_id, content, cell_type)))
+
+    async def run_cell(cell_id: str, notebook_path: str) -> dict[str, Any]:
+        calls.append(("run", (cell_id, notebook_path)))
+        return {"success": True}
+
+    import jupyter_ai_tools.toolkits.notebook
+
+    monkeypatch.setattr(mcp, "_server_app", lambda: FakeServer(str(tmp_path)))
+    monkeypatch.setattr(mcp, "_notebook_path", lambda _path: _async_value(tmp_path / "demo.ipynb"))
+    monkeypatch.setattr(jupyter_ai_tools.toolkits.notebook, "add_cell", add_cell)
+    monkeypatch.setattr(jupyter_ai_tools.toolkits.notebook, "edit_cell", edit_cell)
+    monkeypatch.setattr(jupyter_ai_tools.toolkits.notebook, "read_notebook_json", read_notebook)
+    monkeypatch.setattr(mcp, "run_distributed_cell", run_cell)
+
+    result = await mcp.append_execute_distributed_cell("rank * world_size")
+
+    assert result["cell_id"] == "4"
+    assert result["cell_index"] == 4
+    assert result["reused_blank_cell"] is True
+    assert calls == [
+        ("edit", ("demo.ipynb", "4", "rank * world_size", "code")),
+        ("run", ("4", "demo.ipynb")),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_distributed_cell_returns_complete_rank_results(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executions = [
+        {"notebook_path": "demo.ipynb", "cell_id": "cell-id", "executions": []},
+        {
+            "notebook_path": "demo.ipynb",
+            "cell_id": "cell-id",
+            "executions": [
+                {
+                    "execution_id": "new",
+                    "status": "ok",
+                    "world_size": 2,
+                    "ranks": [
+                        {"rank": 0, "status": "ok", "outputs": [{"text": "0"}]},
+                        {"rank": 1, "status": "ok", "outputs": [{"text": "2"}]},
+                    ],
+                }
+            ],
+        },
+    ]
+
+    async def info(_path: str) -> dict[str, Any]:
+        return {"world_size": 2}
+
+    async def outputs(*_args: Any) -> dict[str, Any]:
+        return executions.pop(0)
+
+    async def run_cell(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"success": True, "result": {"success": True, "status": "ok"}}
+
+    import jupyter_ai_tools.toolkits.jupyterlab
+
+    monkeypatch.setattr(mcp, "_server_app", lambda: FakeServer(str(tmp_path)))
+    monkeypatch.setattr(mcp, "_notebook_path", lambda _path: _async_value(tmp_path / "demo.ipynb"))
+    monkeypatch.setattr(mcp, "get_distributed_notebook_info", info)
+    monkeypatch.setattr(mcp, "read_distributed_cell_outputs", outputs)
+    monkeypatch.setattr(jupyter_ai_tools.toolkits.jupyterlab, "run_cell", run_cell)
+
+    result = await mcp.run_distributed_cell("cell-id", "demo.ipynb")
+
+    assert result["success"] is True
+    assert result["classification"] == "ok"
+    assert result["rank_output_counts"] == {"0": 1, "1": 1}
+
+
+@pytest.mark.asyncio
+async def test_run_distributed_cell_classifies_incomplete_aggregation_as_extension_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def info(_path: str) -> dict[str, Any]:
+        return {"world_size": 4}
+
+    async def outputs(*_args: Any) -> dict[str, Any]:
+        return {"executions": []}
+
+    async def run_cell(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"success": True, "result": {"success": True, "status": "ok"}}
+
+    async def incomplete(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {
+            "execution_id": "new",
+            "status": "busy",
+            "world_size": 4,
+            "ranks": [{"rank": 0, "status": "running", "outputs": [{"text": "0"}]}],
+        }
+
+    import jupyter_ai_tools.toolkits.jupyterlab
+
+    monkeypatch.setattr(mcp, "_server_app", lambda: FakeServer(str(tmp_path)))
+    monkeypatch.setattr(mcp, "_notebook_path", lambda _path: _async_value(tmp_path / "demo.ipynb"))
+    monkeypatch.setattr(mcp, "get_distributed_notebook_info", info)
+    monkeypatch.setattr(mcp, "read_distributed_cell_outputs", outputs)
+    monkeypatch.setattr(mcp, "_wait_for_distributed_execution", incomplete)
+    monkeypatch.setattr(jupyter_ai_tools.toolkits.jupyterlab, "run_cell", run_cell)
+
+    result = await mcp.run_distributed_cell("cell-id", "demo.ipynb")
+
+    assert result["success"] is False
+    assert result["classification"] == "jupyter_distributed_error"
+    assert "not evidence that the cell source is wrong" in result["message"]
+    assert "do not append a replacement" in result["recommended_action"]
 
 
 @pytest.mark.asyncio
@@ -323,8 +470,9 @@ def test_jupyter_server_mcp_tools_and_optional_extra_are_declared() -> None:
 def test_tool_list_contains_notebook_and_distributed_tools() -> None:
     assert "jupyter_ai_tools.toolkits.notebook:read_notebook" in mcp.TOOLS
     assert "jupyter_ai_tools.toolkits.notebook:edit_cell" in mcp.TOOLS
-    assert "jupyter_ai_tools.toolkits.jupyterlab:run_cell" in mcp.TOOLS
+    assert "jupyter_ai_tools.toolkits.jupyterlab:run_cell" not in mcp.TOOLS
     assert "jupyter_distributed.mcp:get_distributed_notebook_info" in mcp.TOOLS
     assert "jupyter_distributed.mcp:read_distributed_cell_outputs" in mcp.TOOLS
+    assert "jupyter_distributed.mcp:run_distributed_cell" in mcp.TOOLS
     assert "jupyter_distributed.mcp:set_distributed_processes" in mcp.TOOLS
     assert "jupyter_distributed.mcp:select_distributed_debug_rank" in mcp.TOOLS
