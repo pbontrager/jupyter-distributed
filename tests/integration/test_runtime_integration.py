@@ -235,7 +235,11 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
             message_id = info_reply.get("parent_header", {}).get("msg_id")
             if message_id in info_ids:
                 info_replies[message_id] = info_reply["content"]
-        assert all(reply["implementation"] == "ipython" for reply in info_replies.values())
+        assert all(
+            reply["implementation"] == "jupyter_distributed"
+            for reply in info_replies.values()
+        )
+        assert all(reply["language_info"]["name"] == "python" for reply in info_replies.values())
         assert all(reply["debugger"] is True for reply in info_replies.values())
 
         initialized = await debug_through_proxy(

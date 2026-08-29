@@ -391,6 +391,8 @@ class SPMDKernel(Kernel):
         await self._ensure_started()
         content = dict(await self.group.kernel_info())
         content.setdefault("status", "ok")
+        content["implementation"] = self.implementation
+        content["implementation_version"] = self.implementation_version
         supported_features = content.get("supported_features", ())
         debugger = bool(content.get("debugger", False)) or (
             isinstance(supported_features, (list, tuple)) and "debugger" in supported_features
