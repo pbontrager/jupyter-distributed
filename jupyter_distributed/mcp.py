@@ -250,9 +250,7 @@ async def run_cell(
         }
     distributed_value = result.get("distributed_execution")
     distributed = (
-        _compact_execution(distributed_value)
-        if isinstance(distributed_value, Mapping)
-        else None
+        _compact_execution(distributed_value) if isinstance(distributed_value, Mapping) else None
     )
     command_succeeded = _tool_succeeded(execution)
     has_output = isinstance(execution, Mapping) and execution.get("hasOutput") is not False

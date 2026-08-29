@@ -7,6 +7,7 @@ Install the Python development environment and notebook output filter:
 ```bash
 uv sync --extra mcp --group dev
 uv run nbstripout --install
+uv run pre-commit install
 ```
 
 For frontend changes, also install the JavaScript dependencies:
@@ -33,10 +34,11 @@ GPU demos run when at least two CUDA devices are available and otherwise skip.
 
 ## Commit
 
-Format, review, and commit only the intended changes:
+Run all commit checks, review, and commit only the intended changes. The same
+checks run automatically after installing the pre-commit hook:
 
 ```bash
-uv run ruff format .
+uv run pre-commit run --all-files
 git diff
 git add <files>
 git commit -m "brief description"
