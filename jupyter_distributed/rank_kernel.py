@@ -16,6 +16,22 @@ _OUTPUT_TYPES = {"stream", "display_data", "execute_result", "error"}
 OutputCallback = Callable[[int, tuple[RankOutput, ...]], Awaitable[None] | None]
 DebugEventCallback = Callable[[int, Mapping[str, Any]], Awaitable[None] | None]
 CommEventCallback = Callable[[int, Mapping[str, Any]], Awaitable[None] | None]
+FailureCallback = Callable[[int, BaseException], Awaitable[None] | None]
+
+
+class RankKernelFailure(RuntimeError):
+    """A child kernel or one of its channel routers stopped unexpectedly."""
+
+    def __init__(
+        self,
+        rank: int,
+        reason: BaseException,
+        outputs: tuple[RankOutput, ...] = (),
+    ) -> None:
+        super().__init__(f"rank {rank} failed: {reason}")
+        self.rank = rank
+        self.reason = reason
+        self.outputs = outputs
 
 
 class RankKernel:
@@ -31,6 +47,7 @@ class RankKernel:
         ready_timeout: float = 30.0,
         on_debug_event: DebugEventCallback | None = None,
         on_comm_event: CommEventCallback | None = None,
+        on_failure: FailureCallback | None = None,
     ) -> None:
         self.rank = rank
         self.env = dict(env)
@@ -38,13 +55,20 @@ class RankKernel:
         self.ready_timeout = ready_timeout
         self.on_debug_event = on_debug_event
         self.on_comm_event = on_comm_event
+        self.on_failure = on_failure
         self.manager = AsyncKernelManager(kernel_name=kernel_name)
         self.client: AsyncKernelClient | None = None
         self._shell_lock = asyncio.Lock()
         self._iopub_queues: dict[str, asyncio.Queue[Mapping[str, Any]]] = {}
         self._iopub_task: asyncio.Task[None] | None = None
+        self._monitor_task: asyncio.Task[None] | None = None
+        self._failure: asyncio.Future[BaseException] | None = None
+        self._display_buffers: dict[str, dict[_RankOutputBuffer, OutputCallback | None]] = {}
+        self._stopping = False
 
     async def start(self) -> None:
+        self._stopping = False
+        self._failure = asyncio.get_running_loop().create_future()
         await self.manager.start_kernel(env=self.env, cwd=self.cwd)
         client = self.manager.client()
         self.client = client
@@ -52,6 +76,7 @@ class RankKernel:
         try:
             await client.wait_for_ready(timeout=self.ready_timeout)
             self._iopub_task = asyncio.create_task(self._route_iopub())
+            self._monitor_task = asyncio.create_task(self._monitor_process())
             await self._install_breakpoint_hook()
         except BaseException:
             await self.shutdown(now=True)
@@ -113,12 +138,21 @@ class RankKernel:
         output_buffer = _RankOutputBuffer(self.rank)
         try:
             while True:
-                message = await iopub_queue.get()
+                try:
+                    message = await self._wait_or_failure(iopub_queue.get())
+                except RankKernelFailure as error:
+                    raise RankKernelFailure(
+                        self.rank, error.reason, output_buffer.snapshot()
+                    ) from error
                 message_type = message.get("msg_type")
-                if (
-                    output_buffer.handle(str(message_type), message.get("content", {}))
-                    and on_output is not None
-                ):
+                content = message.get("content", {})
+                if message_type == "update_display_data":
+                    await self._update_displays(content)
+                    changed = False
+                else:
+                    changed = output_buffer.handle(str(message_type), content)
+                    self._sync_display_buffers(output_buffer, on_output)
+                if changed and on_output is not None:
                     notified = on_output(self.rank, output_buffer.snapshot())
                     if inspect.isawaitable(notified):
                         await notified
@@ -162,7 +196,7 @@ class RankKernel:
         message_id = str(request["header"]["msg_id"])
         client.control_channel.send(request)
         while True:
-            reply = await client.get_control_msg(timeout=None)
+            reply = await self._wait_or_failure(client.get_control_msg(timeout=None))
             if reply.get("parent_header", {}).get("msg_id") == message_id:
                 return reply.get("content", {})
 
@@ -195,7 +229,7 @@ class RankKernel:
     async def _shell_reply(self, message_id: str) -> Mapping[str, Any]:
         client = self._client()
         while True:
-            reply = await client.get_shell_msg(timeout=None)
+            reply = await self._wait_or_failure(client.get_shell_msg(timeout=None))
             if reply.get("parent_header", {}).get("msg_id") == message_id:
                 return reply
 
@@ -204,11 +238,16 @@ class RankKernel:
             await self.manager.interrupt_kernel()
 
     async def shutdown(self, *, now: bool = False) -> None:
+        self._stopping = True
+        self._display_buffers.clear()
         client, self.client = self.client, None
         iopub_task, self._iopub_task = self._iopub_task, None
-        if iopub_task is not None:
-            iopub_task.cancel()
-            await asyncio.gather(iopub_task, return_exceptions=True)
+        monitor_task, self._monitor_task = self._monitor_task, None
+        tasks = [task for task in (iopub_task, monitor_task) if task is not None]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         try:
             if self.manager.has_kernel:
                 await self.manager.shutdown_kernel(now=now)
@@ -219,6 +258,12 @@ class RankKernel:
     async def is_alive(self) -> bool:
         return bool(self.manager.has_kernel and await self.manager.is_alive())
 
+    @property
+    def failure_reason(self) -> BaseException | None:
+        if self._failure is not None and self._failure.done():
+            return self._failure.result()
+        return None
+
     def _client(self) -> AsyncKernelClient:
         if self.client is None:
             raise RuntimeError(f"rank {self.rank} is not running")
@@ -226,24 +271,95 @@ class RankKernel:
 
     async def _route_iopub(self) -> None:
         client = self._client()
-        while True:
-            message = await client.get_iopub_msg(timeout=None)
-            if message.get("msg_type") == "debug_event":
-                if self.on_debug_event is not None:
-                    notified = self.on_debug_event(self.rank, message.get("content", {}))
-                    if inspect.isawaitable(notified):
-                        await notified
+        try:
+            while True:
+                message = await client.get_iopub_msg(timeout=None)
+                if message.get("msg_type") == "debug_event":
+                    if self.on_debug_event is not None:
+                        notified = self.on_debug_event(self.rank, message.get("content", {}))
+                        if inspect.isawaitable(notified):
+                            await notified
+                    continue
+                if message.get("msg_type") in {"comm_open", "comm_msg", "comm_close"}:
+                    if self.on_comm_event is not None:
+                        notified = self.on_comm_event(self.rank, message)
+                        if inspect.isawaitable(notified):
+                            await notified
+                    continue
+                message_id = message.get("parent_header", {}).get("msg_id")
+                queue = self._iopub_queues.get(str(message_id))
+                if queue is not None:
+                    queue.put_nowait(message)
+        except asyncio.CancelledError:
+            if not self._stopping:
+                self._record_failure(RuntimeError(f"rank {self.rank} IOPub router was cancelled"))
+            raise
+        except BaseException as error:
+            self._record_failure(RuntimeError(f"rank {self.rank} IOPub router stopped: {error}"))
+
+    async def _monitor_process(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(0.1)
+                if not await self.is_alive():
+                    self._record_failure(RuntimeError(f"rank {self.rank} process exited"))
+                    return
+        except asyncio.CancelledError:
+            raise
+        except BaseException as error:
+            self._record_failure(RuntimeError(f"rank {self.rank} process monitor failed: {error}"))
+
+    async def _wait_or_failure(self, awaitable: Awaitable[Any]) -> Any:
+        failure = self._failure
+        if failure is None:
+            failure = asyncio.get_running_loop().create_future()
+            self._failure = failure
+        operation = asyncio.ensure_future(awaitable)
+        try:
+            done, _pending = await asyncio.wait(
+                {operation, failure}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if failure in done:
+                raise RankKernelFailure(self.rank, failure.result())
+            return operation.result()
+        finally:
+            if not operation.done():
+                operation.cancel()
+                await asyncio.gather(operation, return_exceptions=True)
+
+    def _record_failure(self, error: BaseException) -> None:
+        if self._stopping or self._failure is None or self._failure.done():
+            return
+        self._failure.set_result(error)
+        if self.on_failure is not None:
+            notified = self.on_failure(self.rank, error)
+            if inspect.isawaitable(notified):
+                asyncio.create_task(notified)
+
+    def _sync_display_buffers(
+        self,
+        buffer: _RankOutputBuffer,
+        callback: OutputCallback | None,
+    ) -> None:
+        current = set(buffer.display_ids)
+        for display_id, buffers in tuple(self._display_buffers.items()):
+            if buffer in buffers and display_id not in current:
+                buffers.pop(buffer, None)
+                if not buffers:
+                    self._display_buffers.pop(display_id, None)
+        for display_id in current:
+            self._display_buffers.setdefault(display_id, {})[buffer] = callback
+
+    async def _update_displays(self, content: Mapping[str, Any]) -> None:
+        display_id = _display_id(content)
+        if display_id is None:
+            return
+        for buffer, callback in tuple(self._display_buffers.get(display_id, {}).items()):
+            if not buffer.update_display(content) or callback is None:
                 continue
-            if message.get("msg_type") in {"comm_open", "comm_msg", "comm_close"}:
-                if self.on_comm_event is not None:
-                    notified = self.on_comm_event(self.rank, message)
-                    if inspect.isawaitable(notified):
-                        await notified
-                continue
-            message_id = message.get("parent_header", {}).get("msg_id")
-            queue = self._iopub_queues.get(str(message_id))
-            if queue is not None:
-                queue.put_nowait(message)
+            notified = callback(self.rank, buffer.snapshot())
+            if inspect.isawaitable(notified):
+                await notified
 
 
 class _RankOutputBuffer:
@@ -259,6 +375,10 @@ class _RankOutputBuffer:
     def snapshot(self) -> tuple[RankOutput, ...]:
         return tuple(self._outputs)
 
+    @property
+    def display_ids(self) -> tuple[str, ...]:
+        return tuple(self._display_ids)
+
     def handle(self, message_type: str, content: Mapping[str, Any]) -> bool:
         if message_type == "clear_output":
             if bool(content.get("wait", False)):
@@ -268,7 +388,7 @@ class _RankOutputBuffer:
             return not self._clear_next
 
         if message_type == "update_display_data":
-            return self._update_display(content)
+            return self.update_display(content)
 
         if message_type not in _OUTPUT_TYPES:
             return False
@@ -309,12 +429,12 @@ class _RankOutputBuffer:
             content=dict(content),
         )
         self._outputs.append(output)
-        if message_type == "display_data":
+        if message_type in {"display_data", "execute_result"}:
             display_id = _display_id(content)
             if display_id is not None:
                 self._display_ids.setdefault(display_id, []).append(len(self._outputs) - 1)
 
-    def _update_display(self, content: Mapping[str, Any]) -> bool:
+    def update_display(self, content: Mapping[str, Any]) -> bool:
         display_id = _display_id(content)
         if display_id is None:
             return False

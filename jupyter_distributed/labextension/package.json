@@ -6,6 +6,7 @@
   "author": "Jupyter Distributed contributors",
   "files": [
     "lib/**/*.{js,js.map,d.ts,tsbuildinfo}",
+    "schema/**/*.json",
     "style/**/*.css"
   ],
   "main": "lib/index.js",
@@ -18,7 +19,8 @@
     "build:labextension:dev": "jupyter labextension build . --development True",
     "clean": "jlpm clean:lib && jlpm clean:labextension",
     "clean:lib": "rimraf lib tsconfig.tsbuildinfo",
-    "clean:labextension": "rimraf jupyter_distributed/labextension"
+    "clean:labextension": "rimraf jupyter_distributed/labextension",
+    "test:browser": "playwright test"
   },
   "dependencies": {
     "@jupyterlab/application": "^4.0.0",
@@ -26,7 +28,6 @@
     "@jupyterlab/cells": "^4.0.0",
     "@jupyterlab/coreutils": "^6.6.3",
     "@jupyterlab/debugger": "^4.0.0",
-    "@jupyterlab/docregistry": "^4.0.0",
     "@jupyterlab/nbformat": "^4.0.0",
     "@jupyterlab/notebook": "^4.0.0",
     "@jupyterlab/outputarea": "^4.0.0",
@@ -34,20 +35,22 @@
     "@jupyterlab/rendermime-interfaces": "^3.8.0",
     "@jupyterlab/services": "^7.6.3",
     "@lumino/coreutils": "^2.2.2",
-    "@lumino/disposable": "^2.1.0",
     "@lumino/signaling": "^2.1.0",
     "@lumino/widgets": "^2.4.0"
   },
   "devDependencies": {
-    "@jupyterlab/builder": "^4.0.0",
+    "@jupyterlab/galata": "^5.6.3",
+    "@playwright/test": "^1.60.0",
+    "@jupyter/builder": "^1.2.2",
     "rimraf": "^5.0.0",
     "typescript": "~5.9.3"
   },
   "jupyterlab": {
     "extension": true,
     "outputDir": "jupyter_distributed/labextension",
+    "schemaDir": "schema",
     "_build": {
-      "load": "static/remoteEntry.b2186c645138ff0a2e70.js",
+      "load": "static/remoteEntry.5904063f82f3c233.js",
       "extension": "./extension",
       "style": "./style"
     }

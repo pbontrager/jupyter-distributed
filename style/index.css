@@ -46,15 +46,17 @@
 }
 
 .jp-JupyterDistributedRankOutput-tabs {
-  align-items: end;
   border-bottom: 1px solid var(--jp-border-color2);
-  display: flex;
-  gap: 2px;
+  min-height: 26px;
   margin-bottom: 4px;
   overflow: hidden;
 }
 
-.jp-JupyterDistributedRankOutput-tab {
+.jp-JupyterDistributedRankOutput-tabs > .lm-TabBar-content {
+  align-items: end;
+}
+
+.jp-JupyterDistributedRankOutput-tabs .lm-TabBar-tab {
   background: transparent;
   border: 0;
   border-bottom: 2px solid transparent;
@@ -63,6 +65,10 @@
   font: inherit;
   min-width: 72px;
   padding: 3px 8px;
+}
+
+.jp-JupyterDistributedRankOutput-tabs .lm-TabBar-tabLabel {
+  line-height: normal;
 }
 
 .jp-JupyterDistributedRankOutput-picker {
@@ -94,21 +100,22 @@
   display: block;
 }
 
-.jp-JupyterDistributedRankOutput-tab:hover,
-.jp-JupyterDistributedRankOutput-tab.jp-mod-selected {
+.jp-JupyterDistributedRankOutput-tabs .lm-TabBar-tab:hover,
+.jp-JupyterDistributedRankOutput-tabs .lm-TabBar-tab.jp-mod-current {
   background: var(--jp-layout-color2);
   color: var(--jp-ui-font-color1);
 }
 
-.jp-JupyterDistributedRankOutput-tab.jp-mod-selected {
+.jp-JupyterDistributedRankOutput-tabs .lm-TabBar-tab.jp-mod-current {
   border-bottom-color: var(--jp-brand-color1);
 }
 
-.jp-JupyterDistributedRankOutput-tab.jp-mod-error {
+.jp-JupyterDistributedRankOutput-tabs .lm-TabBar-tab.jp-mod-error {
   color: var(--jp-error-color1);
 }
 
-.jp-JupyterDistributedRankOutput-tab.jp-mod-error.jp-mod-selected {
+.jp-JupyterDistributedRankOutput-tabs
+  .lm-TabBar-tab.jp-mod-error.jp-mod-current {
   border-bottom-color: var(--jp-error-color1);
 }
 

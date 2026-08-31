@@ -1,8 +1,10 @@
 import { JupyterFrontEnd, JupyterFrontEndPlugin } from '@jupyterlab/application';
+import { IToolbarWidgetRegistry } from '@jupyterlab/apputils';
 import {
   IDebugger,
   IDebuggerSidebar
 } from '@jupyterlab/debugger';
+import { isCodeCellModel } from '@jupyterlab/cells';
 import { INotebookTracker, NotebookPanel } from '@jupyterlab/notebook';
 import { IRenderMimeRegistry } from '@jupyterlab/rendermime';
 import { IRenderMime } from '@jupyterlab/rendermime-interfaces';
@@ -14,43 +16,27 @@ import {
 } from './outputRenderer';
 import { RANK_MIME_TYPE } from './constants';
 import { DebuggerRankSelector } from './debuggerRank';
-import { RankOutputController } from './rankUpdates';
-import { ProcessToolbarExtension } from './toolbar';
+import { ProcessToolbarController } from './toolbar';
 
 const notebookPlugin: JupyterFrontEndPlugin<void> = {
   id: 'jupyter-distributed:notebook',
   description: 'Jupyter Distributed process controls and rank-aware output',
   autoStart: true,
-  requires: [IRenderMimeRegistry, INotebookTracker],
+  requires: [IRenderMimeRegistry, INotebookTracker, IToolbarWidgetRegistry],
   activate: (
     app: JupyterFrontEnd,
     rendermime: IRenderMimeRegistry,
-    notebooks: INotebookTracker
+    notebooks: INotebookTracker,
+    toolbarRegistry: IToolbarWidgetRegistry
   ): void => {
     const rankSelections = new RankSelectionModel();
-    const controllers = new WeakMap<NotebookPanel, RankOutputController>();
-    const controllerFor = (panel: NotebookPanel): RankOutputController => {
-      let controller = controllers.get(panel);
-      if (!controller) {
-        controller = new RankOutputController(panel);
-        controllers.set(panel, controller);
-        panel.disposed.connect(() => controller?.dispose());
-      }
-      return controller;
-    };
-    const processControls = new ProcessToolbarExtension(
-      async (panel, restarted) => {
-        const controller = controllerFor(panel);
-        // Output rendering uses Jupyter's standard display-update channel.
-        // Reconnect the auxiliary agent-results comm without blocking process
-        // controls or treating a comm outage as a failed kernel operation.
-        void (restarted
-          ? controller.reconnect()
-          : controller.ensureConnected());
-      }
-    );
+    const processControls = new ProcessToolbarController();
 
-    app.docRegistry.addWidgetExtension('Notebook', processControls);
+    toolbarRegistry.addFactory<NotebookPanel>(
+      'Notebook',
+      'jupyter-distributed-processes',
+      panel => processControls.createSelector(panel)
+    );
 
     app.commands.addCommand('jupyter-distributed:set-processes', {
       label: 'Set Distributed Processes',
@@ -113,14 +99,9 @@ const notebookPlugin: JupyterFrontEndPlugin<void> = {
           notebooks,
           typeof args.notebookPath === 'string' ? args.notebookPath : null
         );
-        const controller = controllerFor(panel);
-        if (!(await controller.ensureConnected())) {
-          throw new Error('The distributed output channel is not connected.');
-        }
         if (!app.commands.hasCommand('jupyterlab-ai-commands:run-cell')) {
           throw new Error('The Jupyter notebook command tools are not installed.');
         }
-        const previousExecutionId = controller.latestExecutionId(cellId);
         const execution = await app.commands.execute(
           'jupyterlab-ai-commands:run-cell',
           {
@@ -128,14 +109,9 @@ const notebookPlugin: JupyterFrontEndPlugin<void> = {
             cellId
           }
         );
-        const executionRecord = Private.asRecord(execution);
-        const snapshot =
-          executionRecord?.hasOutput === false
-            ? null
-            : await controller.waitForFinal(cellId, previousExecutionId);
         return {
           execution,
-          distributed_execution: snapshot?.data[RANK_MIME_TYPE] ?? null
+          distributed_execution: Private.distributedExecution(panel, cellId)
         };
       }
     });
@@ -149,7 +125,6 @@ const notebookPlugin: JupyterFrontEndPlugin<void> = {
         Private.rendererFactory(contextual, rankSelections),
         0
       );
-      controllerFor(panel);
     };
     notebooks.forEach(registerNotebookRenderer);
     notebooks.widgetAdded.connect((_sender, panel) => {
@@ -231,9 +206,37 @@ namespace Private {
     return panel;
   }
 
-  export function asRecord(value: unknown): Record<string, unknown> | null {
-    return value && typeof value === 'object' && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : null;
+  export function distributedExecution(
+    panel: NotebookPanel,
+    cellId: string
+  ): unknown | null {
+    const cells = panel.content.model?.cells;
+    if (!cells) {
+      return null;
+    }
+    for (let index = 0; index < cells.length; index++) {
+      const cell = cells.get(index);
+      if (cell.id !== cellId) {
+        continue;
+      }
+      if (!isCodeCellModel(cell)) {
+        return null;
+      }
+      const outputs = cell.outputs.toJSON();
+      for (let outputIndex = outputs.length - 1; outputIndex >= 0; outputIndex--) {
+        const output = outputs[outputIndex] as unknown as Record<string, unknown>;
+        const data = output.data;
+        if (
+          data &&
+          typeof data === 'object' &&
+          !Array.isArray(data) &&
+          RANK_MIME_TYPE in data
+        ) {
+          return (data as Record<string, unknown>)[RANK_MIME_TYPE] ?? null;
+        }
+      }
+      return null;
+    }
+    throw new Error(`Notebook cell not found: ${cellId}`);
   }
 }

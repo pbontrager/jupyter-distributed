@@ -24,10 +24,12 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
-  "ipykernel>=6.29",
-  "jupyter-client>=8.6",
-  "jupyter-server>=2.14",
-  "jupyterlab>=4.2",
+  "ipykernel>=6.29,<8",
+  "jupyter-client>=8.6,<9",
+  "jupyter-core>=5.7,<6",
+  "jupyter-server>=2.14,<3",
+  "jupyterlab>=4.2,<5",
+  "psutil>=5.9,<8",
 ]
 
 [project.urls]

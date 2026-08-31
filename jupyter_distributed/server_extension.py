@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from jupyter_server.auth.decorator import authorized
 from jupyter_server.base.handlers import APIHandler
 from jupyter_server.utils import url_path_join
 from tornado import web
+from tornado.ioloop import PeriodicCallback
 
 from . import __version__
 from .coordinator import DistributedKernelCoordinator
@@ -68,8 +70,12 @@ def _load_jupyter_server_extension(server_app: Any) -> None:
     """Register the server-side integration routes."""
 
     base_url = server_app.web_app.settings.get("base_url", "/")
-    coordinator = DistributedKernelCoordinator(server_app.kernel_manager)
+    registry_dir = Path(server_app.runtime_dir) / "jupyter-distributed"
+    coordinator = DistributedKernelCoordinator(server_app.kernel_manager, registry_dir=registry_dir)
+    reaper_callback = PeriodicCallback(coordinator.reaper.reap, 2000)
+    reaper_callback.start()
     server_app.web_app.settings["jupyter_distributed_coordinator"] = coordinator
+    server_app.web_app.settings["jupyter_distributed_reaper"] = reaper_callback
     health_route = url_path_join(base_url, "jupyter-distributed", "health")
     kernel_route = url_path_join(
         base_url,

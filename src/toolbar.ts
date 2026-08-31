@@ -1,9 +1,7 @@
 import { Dialog, showDialog, showErrorMessage } from '@jupyterlab/apputils';
 import { URLExt } from '@jupyterlab/coreutils';
-import { DocumentRegistry } from '@jupyterlab/docregistry';
-import { INotebookModel, NotebookPanel } from '@jupyterlab/notebook';
+import { NotebookPanel } from '@jupyterlab/notebook';
 import { ServerConnection } from '@jupyterlab/services';
-import { DisposableDelegate, IDisposable } from '@lumino/disposable';
 import { Widget } from '@lumino/widgets';
 
 const METADATA_KEY = 'jupyter_distributed';
@@ -17,17 +15,10 @@ interface DistributedKernelModel {
 }
 
 class ProcessSelector extends Widget {
-  constructor(
-    panel: NotebookPanel,
-    onKernelConfigured: (
-      panel: NotebookPanel,
-      restarted: boolean
-    ) => Promise<void>
-  ) {
+  constructor(panel: NotebookPanel) {
     super({ node: Private.createNode() });
     this.addClass('jp-JupyterDistributedProcessSelector');
     this._panel = panel;
-    this._onKernelConfigured = onKernelConfigured;
     this._input = this.node.querySelector('input')!;
 
     this._input.addEventListener('click', this._onClick);
@@ -128,7 +119,6 @@ class ProcessSelector extends Widget {
       const targetWorldSize = savedWorldSize ?? model.world_size;
       if (model.proxied && targetWorldSize === model.world_size) {
         this._setWorldSize(model.world_size);
-        await this._onKernelConfigured(this._panel, false);
         return;
       }
 
@@ -140,7 +130,6 @@ class ProcessSelector extends Widget {
       });
       if (kernelId === this._kernelId()) {
         this._setWorldSize(restored.world_size);
-        await this._onKernelConfigured(this._panel, true);
       }
     } catch (error) {
       // Keep the default value if the server extension is unavailable.
@@ -211,7 +200,6 @@ class ProcessSelector extends Widget {
       if (current.proxied && next === current.world_size) {
         this._setWorldSize(next);
         this._saveWorldSize(next);
-        await this._onKernelConfigured(this._panel, false);
         return current;
       }
 
@@ -240,7 +228,6 @@ class ProcessSelector extends Widget {
       }
       this._setWorldSize(model.world_size);
       this._saveWorldSize(model.world_size);
-      await this._onKernelConfigured(this._panel, true);
       return model;
     } catch (error) {
       if (kernelId === this._kernelId()) {
@@ -327,25 +314,10 @@ class ProcessSelector extends Widget {
   private _pending = false;
   private _ready = false;
   private _input: HTMLInputElement;
-  private _onKernelConfigured: (
-    panel: NotebookPanel,
-    restarted: boolean
-  ) => Promise<void>;
   private _syncRequest = 0;
 }
 
-export class ProcessToolbarExtension
-  implements DocumentRegistry.IWidgetExtension<NotebookPanel, INotebookModel>
-{
-  constructor(
-    onKernelConfigured: (
-      panel: NotebookPanel,
-      restarted: boolean
-    ) => Promise<void>
-  ) {
-    this._onKernelConfigured = onKernelConfigured;
-  }
-
+export class ProcessToolbarController {
   async setWorldSize(
     panel: NotebookPanel,
     worldSize: number,
@@ -358,33 +330,17 @@ export class ProcessToolbarExtension
     return selector.setWorldSize(worldSize, confirm);
   }
 
-  createNew(
-    panel: NotebookPanel,
-    context: DocumentRegistry.IContext<INotebookModel>
-  ): IDisposable {
-    const selector = new ProcessSelector(panel, this._onKernelConfigured);
+  createSelector(panel: NotebookPanel): Widget {
+    const selector = new ProcessSelector(panel);
     this._selectors.set(panel, selector);
-    if (
-      !panel.toolbar.insertAfter(
-        'kernelName',
-        'jupyter-distributed-processes',
-        selector
-      )
-    ) {
-      panel.toolbar.addItem('jupyter-distributed-processes', selector);
-    }
-    return new DisposableDelegate(() => {
+    selector.disposed.connect(() => {
       if (this._selectors.get(panel) === selector) {
         this._selectors.delete(panel);
       }
-      selector.dispose();
     });
+    return selector;
   }
 
-  private _onKernelConfigured: (
-    panel: NotebookPanel,
-    restarted: boolean
-  ) => Promise<void>;
   private _selectors = new WeakMap<NotebookPanel, ProcessSelector>();
 }
 

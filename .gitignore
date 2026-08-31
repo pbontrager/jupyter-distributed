@@ -11,5 +11,7 @@ __pycache__/
 dist/
 lib/
 node_modules/
+playwright-report/
+test-results/
 tsconfig.tsbuildinfo
 uv.lock

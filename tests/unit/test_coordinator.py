@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from jupyter_distributed.coordinator import DistributedKernelCoordinator
+from jupyter_distributed.coordinator import DistributedKernelCoordinator, KernelLaunchAdapter
 
 
 @dataclass
@@ -39,9 +39,9 @@ class FakeKernelManager:
 
 
 @pytest.mark.asyncio
-async def test_keeps_every_process_count_on_the_internal_proxy() -> None:
+async def test_keeps_every_process_count_on_the_internal_proxy(tmp_path: Any) -> None:
     manager = FakeKernelManager()
-    coordinator = DistributedKernelCoordinator(manager)
+    coordinator = DistributedKernelCoordinator(manager, registry_dir=tmp_path)
 
     single = await coordinator.set_world_size("kernel-id", 1)
 
@@ -64,6 +64,9 @@ async def test_keeps_every_process_count_on_the_internal_proxy() -> None:
     )
     assert manager.kernel._launch_args["env"]["JUPYTER_DISTRIBUTED_WORLD_SIZE"] == "4"
     assert manager.kernel._launch_args["env"]["JUPYTER_DISTRIBUTED_CWD"] == "/notebooks"
+    assert manager.kernel._launch_args["env"]["JUPYTER_DISTRIBUTED_REGISTRY_FILE"] == str(
+        tmp_path / "kernel-id.json"
+    )
 
     single_again = await coordinator.set_world_size("kernel-id", 1)
 
@@ -97,3 +100,11 @@ async def test_accepts_arbitrary_positive_process_count() -> None:
     assert model["world_size"] == 257
     assert model["proxied"] is True
     assert manager.kernel._launch_args["env"]["JUPYTER_DISTRIBUTED_WORLD_SIZE"] == "257"
+
+
+def test_launch_adapter_rejects_incompatible_kernel_manager() -> None:
+    kernel = FakeKernel()
+    kernel._launch_args = None  # type: ignore[assignment]
+
+    with pytest.raises(RuntimeError, match="mutable launch arguments"):
+        KernelLaunchAdapter().capture(kernel)

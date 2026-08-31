@@ -1,0 +1,15 @@
+{
+  "title": "Jupyter Distributed",
+  "description": "Jupyter Distributed toolbar contributions.",
+  "jupyter.lab.toolbars": {
+    "Notebook": [
+      {
+        "name": "jupyter-distributed-processes",
+        "rank": 1001
+      }
+    ]
+  },
+  "properties": {},
+  "additionalProperties": false,
+  "type": "object"
+}

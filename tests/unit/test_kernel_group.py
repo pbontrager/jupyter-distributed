@@ -13,6 +13,8 @@ from jupyter_distributed.rank_kernel import _RankOutputBuffer
 
 class FakeRankKernel:
     instances: ClassVar[list[FakeRankKernel]] = []
+    start_gate: ClassVar[asyncio.Event | None] = None
+    dead_rank: ClassVar[int | None] = None
 
     def __init__(self, rank: int, env: dict[str, str], **kwargs: Any) -> None:
         self.rank = rank
@@ -22,9 +24,12 @@ class FakeRankKernel:
         self.interrupted = False
         self.gate: asyncio.Event | None = None
         self.executions: list[tuple[str, dict[str, Any]]] = []
+        self.failure_reason: BaseException | None = None
         self.instances.append(self)
 
     async def start(self) -> None:
+        if self.start_gate is not None:
+            await self.start_gate.wait()
         self.started = True
 
     async def execute(self, code: str, **kwargs: Any) -> RankExecution:
@@ -40,12 +45,14 @@ class FakeRankKernel:
         self.stopped = True
 
     async def is_alive(self) -> bool:
-        return self.started and not self.stopped
+        return self.started and not self.stopped and self.rank != self.dead_rank
 
 
 @pytest.fixture(autouse=True)
 def fake_rank_kernel(monkeypatch: pytest.MonkeyPatch) -> None:
     FakeRankKernel.instances = []
+    FakeRankKernel.start_gate = None
+    FakeRankKernel.dead_rank = None
     monkeypatch.setattr(kernel_group_module, "RankKernel", FakeRankKernel)
     monkeypatch.setattr(kernel_group_module, "_free_port", lambda host: 23456)
 
@@ -65,6 +72,40 @@ async def test_start_sets_distributed_rank_environment() -> None:
     assert {rank.env["JAX_NUM_PROCESSES"] for rank in group.ranks} == {"2"}
     assert all(rank.env["EXTRA"] == "yes" for rank in group.ranks)
     assert all("PYTHONBREAKPOINT" in rank.env for rank in group.ranks)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_start_waits_for_one_atomic_startup() -> None:
+    FakeRankKernel.start_gate = asyncio.Event()
+    group = DistributedKernelGroup(2)
+
+    first = asyncio.create_task(group.start())
+    await asyncio.sleep(0)
+    second = asyncio.create_task(group.start())
+    await asyncio.sleep(0)
+
+    assert group.ranks == ()
+    assert (await group.status()).state == "starting"
+
+    FakeRankKernel.start_gate.set()
+    await asyncio.gather(first, second)
+
+    assert len(group.ranks) == 2
+    assert len(FakeRankKernel.instances) == 2
+    assert (await group.status()).state == "idle"
+
+
+@pytest.mark.asyncio
+async def test_start_is_rolled_back_if_a_rank_exits_during_startup() -> None:
+    FakeRankKernel.dead_rank = 1
+    group = DistributedKernelGroup(2)
+
+    with pytest.raises(RuntimeError, match="failed to start"):
+        await group.start()
+
+    assert group.ranks == ()
+    assert all(rank.stopped for rank in FakeRankKernel.instances)
+    assert (await group.status()).state == "stopped"
 
 
 @pytest.mark.asyncio

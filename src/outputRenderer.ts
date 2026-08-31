@@ -4,13 +4,20 @@ import { IRenderMimeRegistry } from '@jupyterlab/rendermime';
 import { IRenderMime } from '@jupyterlab/rendermime-interfaces';
 import { JSONExt } from '@lumino/coreutils';
 import { Signal } from '@lumino/signaling';
-import { Panel, Widget } from '@lumino/widgets';
+import { Panel, TabBar, Widget } from '@lumino/widgets';
 
 import { RANK_MIME_TYPE } from './constants';
-import { executionId } from './rankUpdates';
 
 export const MIME_TYPE = RANK_MIME_TYPE;
 const MIN_RANK_TAB_WIDTH = 72;
+
+function executionId(value: unknown): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const id = (value as Record<string, unknown>).execution_id;
+  return typeof id === 'string' && id ? id : null;
+}
 
 interface RankRecord {
   rank: number;
@@ -137,7 +144,7 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
       this._selectedRank = this._ranks.includes(remembered)
         ? remembered
         : this._ranks[0];
-      this._createNavigation(ranks);
+      this._createNavigation(ranks.length);
       for (const rank of ranks) {
         this._createRankView(rank.rank, trusted);
       }
@@ -182,13 +189,18 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
     this._layoutKey = null;
   }
 
-  private _createNavigation(ranks: RankRecord[]): void {
-    if (ranks.length <= 1) {
+  private _createNavigation(rankCount: number): void {
+    if (rankCount <= 1) {
       return;
     }
-    const tabs = new Widget({ node: document.createElement('div') });
+    const tabs = new TabBar<Widget>({
+      allowDeselect: false,
+      insertBehavior: 'none',
+      removeBehavior: 'select-previous-tab',
+      tabsMovable: false
+    });
     tabs.addClass('jp-JupyterDistributedRankOutput-tabs');
-    tabs.node.setAttribute('role', 'tablist');
+    tabs.currentChanged.connect(this._onTabChanged, this);
     this._tabs = tabs;
     this.addWidget(tabs);
 
@@ -198,21 +210,9 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
     this._rankSelect.addEventListener('change', this._onDropdownChange);
     this.addWidget(picker);
 
-    for (const rank of ranks) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.textContent = `Rank ${rank.rank}`;
-      button.dataset.rank = String(rank.rank);
-      button.className = 'jp-JupyterDistributedRankOutput-tab';
-      button.setAttribute('role', 'tab');
-      button.addEventListener('click', () => {
-        this._selections.set(this._executionId, rank.rank);
-        this._select(rank.rank);
-      });
-      tabs.node.appendChild(button);
-
+    for (const rank of this._ranks) {
       const option = document.createElement('option');
-      option.value = String(rank.rank);
+      option.value = String(rank);
       this._rankSelect.appendChild(option);
     }
   }
@@ -231,19 +231,21 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
     area.addClass('jp-JupyterDistributedRankOutput-rank');
     area.node.dataset.rank = String(rank);
     area.node.setAttribute('role', 'tabpanel');
+    area.title.label = `Rank ${rank}`;
+    area.title.caption = `Output from rank ${rank}`;
+    area.title.closable = false;
+    this._tabs?.addTab(area.title);
     this.addWidget(area);
     this._rankViews.set(rank, { area, model });
   }
 
   private _updateRankStatus(rank: RankRecord): void {
-    const button = this._tabs?.node.querySelector<HTMLButtonElement>(
-      `[data-rank="${rank.rank}"]`
-    );
-    if (button) {
-      button.classList.toggle('jp-mod-error', rank.error);
-      button.title = rank.error
+    const view = this._rankViews.get(rank.rank);
+    if (view) {
+      view.area.title.className = rank.error ? 'jp-mod-error' : '';
+      view.area.title.caption = rank.error
         ? `Rank ${rank.rank} produced an error`
-        : '';
+        : `Output from rank ${rank.rank}`;
     }
     const option = this._rankSelect?.querySelector<HTMLOptionElement>(
       `option[value="${rank.rank}"]`
@@ -260,13 +262,10 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
       return;
     }
     this._selectedRank = rank;
-    this._tabs?.node
-      .querySelectorAll<HTMLButtonElement>('[data-rank]')
-      .forEach(button => {
-        const selected = Number(button.dataset.rank) === rank;
-        button.classList.toggle('jp-mod-selected', selected);
-        button.setAttribute('aria-selected', String(selected));
-      });
+    const selectedView = this._rankViews.get(rank);
+    if (this._tabs && selectedView) {
+      this._tabs.currentTitle = selectedView.area.title;
+    }
     if (this._rankSelect) {
       this._rankSelect.value = String(rank);
     }
@@ -293,6 +292,17 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
     this._select(rank);
   };
 
+  private _onTabChanged(
+    sender: TabBar<Widget>,
+    change: TabBar.ICurrentChangedArgs<Widget>
+  ): void {
+    const rank = Number(change.currentTitle?.owner.node.dataset.rank);
+    if (Number.isInteger(rank) && this._ranks.includes(rank)) {
+      this._selections.set(this._executionId, rank);
+      this._select(rank);
+    }
+  }
+
   private _updateNavigationMode(): void {
     const width = this.node.getBoundingClientRect().width;
     const useDropdown =
@@ -312,7 +322,7 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
   private _resizeObserver: ResizeObserver;
   private _selectedRank = 0;
   private _selections: RankSelectionModel;
-  private _tabs: Widget | null = null;
+  private _tabs: TabBar<Widget> | null = null;
 }
 
 namespace Private {

@@ -29,7 +29,8 @@ model sharding, and synchronization.
 
 1. The user selects an ordinary installed kernelspec. There is no public
    Jupyter Distributed kernelspec.
-2. A process count of one uses the selected kernel directly.
+2. A process count of one uses one instance of the selected kernel behind the
+   same proxy path as larger groups.
 3. A process count greater than one preserves one logical Jupyter kernel while
    running persistent copies of the selected kernel behind it.
 4. Ordinary cells execute on every rank by default.
@@ -170,6 +171,10 @@ when the frontend extension is unavailable.
 - Interrupt is fanned out to all child kernel managers.
 - Shutdown attempts to terminate every child even if another child fails.
 - A normal exception on one rank does not automatically kill the other ranks.
+- An unexpected child exit or IOPub-router failure interrupts surviving work,
+  marks the group restart-required, and preserves partial output.
+- Child process identities are published in the Jupyter runtime directory so
+  the server can reap verified process groups after a hard proxy failure.
 - A failed user collective may leave framework state unusable; restarting the
   group is the recovery mechanism.
 - Multi-rank `input()` is rejected rather than allowing processes to compete
@@ -195,7 +200,7 @@ timeout.
 - JupyterLab 4 and Jupyter Notebook 7 are supported; the debugger UI is
   JupyterLab-only.
 - No elastic world-size changes.
-- No arbitrary rank-targeted execution mode.
+- `%%rank N` targets one rank; arbitrary rank subsets are not supported.
 - No stdin routing in distributed mode.
 - Debugger integration is currently validated with Python/IPython and debugpy;
   other kernels require compatible Jupyter DAP behavior.
@@ -213,12 +218,14 @@ Portable CPU integration tests cover:
 - multi-rank launch and environment values;
 - persistent state across cells;
 - live streams and output-state updates;
+- cross-cell display-ID updates and execute-reply payloads;
 - rank-specific results and exceptions;
-- interrupt, restart, shutdown, and cleanup;
+- interrupt, restart, shutdown, child failure, and orphan cleanup;
 - bidirectional rank-owned widget messages, binary buffers, and reconnect state;
 - two-rank breakpoints, stepping, stack and variable inspection, expression
   evaluation, and external-library `breakpoint()` calls;
 - a two-rank Gloo collective when PyTorch is installed.
+- browser-level streaming, rank navigation, restart, and reconnect behavior.
 
 Release testing should additionally cover JupyterLab and Notebook 7 browser
 behavior and two-GPU NCCL workflows. Demo notebooks should be checked
@@ -228,11 +235,9 @@ periodically because PyTorch and Transformers distributed APIs evolve quickly.
 
 ### Near term
 
-- Add automated JupyterLab browser tests for process selection, live output,
-  responsive rank navigation, restart restoration, and error selection.
 - Exercise additional kernelspecs and remove Python-specific assumptions from
   generic paths.
-- Improve rank startup, liveness, and partial-failure diagnostics.
+- Expand browser coverage for responsive navigation and error selection.
 - Measure high-volume streaming behavior and replace full snapshots with an
   incremental protocol if needed.
 - Validate and maintain the FSDP and tensor-parallel Transformers demos on

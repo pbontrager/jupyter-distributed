@@ -87,13 +87,15 @@ class GroupExecution:
 
 @dataclass(frozen=True, slots=True)
 class GroupStatus:
-    state: Literal["stopped", "starting", "idle", "busy", "restarting"]
+    state: Literal["stopped", "starting", "idle", "busy", "restarting", "restart_required"]
     world_size: int
     alive_ranks: tuple[int, ...]
+    failure: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "state": self.state,
             "world_size": self.world_size,
             "alive_ranks": list(self.alive_ranks),
+            "failure": self.failure,
         }

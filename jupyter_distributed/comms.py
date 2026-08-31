@@ -25,6 +25,8 @@ class _CommRecord:
 class _WidgetStateRequest:
     expected: set[int]
     replies: dict[int, Mapping[str, Any]] = field(default_factory=dict)
+    missing: set[int] = field(default_factory=set)
+    request: Mapping[str, Any] = field(default_factory=dict)
 
 
 class DistributedCommRouter:
@@ -74,7 +76,9 @@ class DistributedCommRouter:
             and record.target_name == _WIDGET_CONTROL_TARGET
             and _mapping(content.get("data")).get("method") == "request_states"
         ):
-            self._widget_state_requests[comm_id] = _WidgetStateRequest(expected=set(record.ranks))
+            self._widget_state_requests[comm_id] = _WidgetStateRequest(
+                expected=set(record.ranks), request=copy.deepcopy(dict(message))
+            )
 
         await self._kernel.group.send_comm(
             sorted(record.ranks),
@@ -131,6 +135,7 @@ class DistributedCommRouter:
             pending = self._widget_state_requests.get(comm_id)
             if pending is not None:
                 pending.expected.discard(rank)
+                pending.missing.add(rank)
                 self._finish_widget_state(comm_id, pending)
             if record.frontend_opened and record.ranks:
                 return
@@ -150,6 +155,18 @@ class DistributedCommRouter:
     def reset(self) -> None:
         self._comms.clear()
         self._widget_state_requests.clear()
+
+    def handle_rank_failure(self, rank: int, reason: BaseException) -> None:
+        """Remove a failed rank from comm ownership and finish partial state requests."""
+
+        for record in self._comms.values():
+            record.ranks.discard(rank)
+        for comm_id, pending in tuple(self._widget_state_requests.items()):
+            if rank in pending.expected:
+                pending.expected.discard(rank)
+                pending.missing.add(rank)
+                self._finish_widget_state(comm_id, pending)
+        self._kernel.log.warning("Rank %d comm endpoint failed: %s", rank, reason)
 
     def _collect_widget_state(
         self,
@@ -176,15 +193,24 @@ class DistributedCommRouter:
         return True
 
     def _finish_widget_state(self, comm_id: str, pending: _WidgetStateRequest) -> None:
-        if not pending.replies or not pending.expected.issubset(pending.replies):
+        if not pending.expected.issubset(pending.replies):
             return
 
         states: dict[str, Any] = {}
         buffer_paths: list[Any] = []
         buffers: list[Any] = []
-        first = pending.replies[min(pending.replies)]
-        merged_content = copy.deepcopy(dict(_mapping(first.get("content"))))
-        merged_data = copy.deepcopy(dict(_mapping(merged_content.get("data"))))
+        if pending.replies:
+            first = pending.replies[min(pending.replies)]
+            merged_content = copy.deepcopy(dict(_mapping(first.get("content"))))
+            merged_data = copy.deepcopy(dict(_mapping(merged_content.get("data"))))
+        else:
+            request_header = dict(_mapping(pending.request.get("header")))
+            first = {
+                "parent_header": request_header,
+                "metadata": dict(_mapping(pending.request.get("metadata"))),
+            }
+            merged_content = {"comm_id": comm_id}
+            merged_data = {"method": "update_states"}
         for response_rank in sorted(pending.replies):
             response = pending.replies[response_rank]
             response_data = _mapping(_mapping(response.get("content")).get("data"))
@@ -204,6 +230,8 @@ class DistributedCommRouter:
 
         merged_data["states"] = states
         merged_data["buffer_paths"] = buffer_paths
+        if pending.missing:
+            merged_data["jupyter_distributed_missing_ranks"] = sorted(pending.missing)
         merged_content["data"] = merged_data
         self._publish("comm_msg", merged_content, first, buffers=buffers)
         self._widget_state_requests.pop(comm_id, None)
