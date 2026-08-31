@@ -50,10 +50,11 @@ async def get_distributed_notebook_info(
     and process count are available through the ``RANK`` and ``WORLD_SIZE``
     environment variables. To change the process count, call
     ``set_distributed_processes``; do not edit notebook metadata or use a
-    generic kernel restart operation. Never edit an ``.ipynb`` file directly
-    through filesystem tools because the live notebook may contain unsaved user
-    changes. If live notebook access is unavailable, report the connection
-    failure instead of falling back to direct file edits.
+    generic kernel restart operation. Unless instructed by the user, never edit
+    an ``.ipynb`` file directly through filesystem tools because the live
+    notebook may contain unsaved user changes. If live notebook access is
+    unavailable, report the connection failure instead of falling back to direct
+    file edits.
     """
     path = await _notebook_path(notebook_path)
     server = _server_app()
@@ -470,10 +471,10 @@ def _cell_workflow() -> dict[str, Any]:
             "when no dedicated MCP tool covers the operation."
         ),
         "notebook_file_safety": (
-            "Never edit an .ipynb file directly through filesystem tools. The live notebook "
-            "may contain unsaved user changes that are not present on disk. If live notebook "
-            "or MCP access fails, stop and report the connection problem instead of falling "
-            "back to direct file edits."
+            "Unless instructed by the user, never edit an .ipynb file directly through "
+            "filesystem tools. The live notebook may contain unsaved user changes that are "
+            "not present on disk. If live notebook or MCP access fails, stop and report the "
+            "connection problem instead of falling back to direct file edits."
         ),
         "new_bottom_cell_tool": "append_cell",
         "reuses_first_trailing_blank_cell": True,
