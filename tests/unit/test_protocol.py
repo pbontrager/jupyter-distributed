@@ -45,3 +45,16 @@ def test_rich_output_has_a_plain_fallback() -> None:
         {"data": {"image/png": "bytes", "text/plain": "a plot"}},
     )
     assert output.plain_text() == "a plot"
+
+
+def test_plain_fallback_strips_ansi_sequences() -> None:
+    output = RankOutput(
+        0,
+        "error",
+        {
+            "ename": "IndexError",
+            "evalue": "bad index",
+            "traceback": ["\x1b[0;31mIndexError\x1b[0m: bad index"],
+        },
+    )
+    assert output.plain_text() == "IndexError: bad index"

@@ -10,6 +10,7 @@ from typing import Any
 from jupyter_server.serverapp import ServerApp
 
 from .kernel_proxy import RANK_MIME
+from .protocol import strip_ansi
 
 # jupyter-server-mcp discovers these functions when both optional integrations
 # are installed. The Jupyter AI tools provide general live-notebook operations;
@@ -574,21 +575,21 @@ def _compact_output(output: Any) -> dict[str, Any]:
         return {
             "type": "stream",
             "name": content.get("name"),
-            "text": _text(content.get("text")),
+            "text": _plain_text(content.get("text")),
         }
     if output_type == "error":
         return {
             "type": "error",
             "ename": content.get("ename"),
             "evalue": content.get("evalue"),
-            "traceback": content.get("traceback", []),
+            "traceback": _plain_traceback(content.get("traceback")),
         }
     data = content.get("data", {})
     if not isinstance(data, Mapping):
         return {"type": output_type, "text": str(data)}
     return {
         "type": output_type,
-        "text": _text(data.get("text/plain")),
+        "text": _plain_text(data.get("text/plain")),
         "mime_types": sorted(str(mime_type) for mime_type in data),
     }
 
@@ -599,6 +600,17 @@ def _text(value: Any) -> str | None:
     if isinstance(value, list):
         return "".join(str(part) for part in value)
     return str(value)
+
+
+def _plain_text(value: Any) -> str | None:
+    text = _text(value)
+    return strip_ansi(text) if text is not None else None
+
+
+def _plain_traceback(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [strip_ansi(line) for line in value]
 
 
 __all__ = [

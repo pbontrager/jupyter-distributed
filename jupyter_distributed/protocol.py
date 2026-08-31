@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 from uuid import uuid4
 
 OutputKind = Literal["stream", "display_data", "execute_result", "error"]
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def strip_ansi(value: object) -> str:
+    """Remove terminal control sequences from a plain-text fallback."""
+
+    return _ANSI_ESCAPE.sub("", str(value))
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,17 +31,17 @@ class RankOutput:
 
     def plain_text(self) -> str:
         if self.kind == "stream":
-            return str(self.content.get("text", ""))
+            return strip_ansi(self.content.get("text", ""))
         if self.kind in {"display_data", "execute_result"}:
             data = self.content.get("data", {})
             if isinstance(data, Mapping) and "text/plain" in data:
-                return str(data["text/plain"])
+                return strip_ansi(data["text/plain"])
             if isinstance(data, Mapping):
                 return "<" + ", ".join(sorted(str(key) for key in data)) + ">"
             return str(data)
         traceback = self.content.get("traceback")
         if isinstance(traceback, list):
-            return "\n".join(str(line) for line in traceback)
+            return "\n".join(strip_ansi(line) for line in traceback)
         return f"{self.content.get('ename', 'Error')}: {self.content.get('evalue', '')}"
 
 

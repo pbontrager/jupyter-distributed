@@ -166,7 +166,7 @@ async def test_reads_compact_outputs_for_every_rank(
                                                 "content": {
                                                     "ename": "ValueError",
                                                     "evalue": "bad rank",
-                                                    "traceback": ["trace"],
+                                                    "traceback": ["\x1b[0;31mValueError\x1b[0m"],
                                                 },
                                             }
                                         ],
@@ -198,6 +198,7 @@ async def test_reads_compact_outputs_for_every_rank(
         "mime_types": ["text/html", "text/plain"],
     }
     assert execution["ranks"][1]["outputs"][0]["evalue"] == "bad rank"
+    assert execution["ranks"][1]["outputs"][0]["traceback"] == ["ValueError"]
 
 
 @pytest.mark.asyncio

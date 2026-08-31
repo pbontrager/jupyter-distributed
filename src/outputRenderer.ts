@@ -223,13 +223,16 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
   ): Promise<void> {
     if (output.output_type === 'stream') {
       const text = Private.asText(output.text);
-      parent.addWidget(
-        Private.textWidget(
-          text,
-          output.name === 'stderr'
-            ? 'jp-JupyterDistributedRankOutput-stderr'
-            : 'jp-JupyterDistributedRankOutput-stdout'
-        )
+      await this._renderMime(
+        parent,
+        output.name === 'stderr'
+          ? 'application/vnd.jupyter.stderr'
+          : 'application/vnd.jupyter.stdout',
+        text,
+        trusted,
+        output.name === 'stderr'
+          ? 'jp-JupyterDistributedRankOutput-stderr'
+          : 'jp-JupyterDistributedRankOutput-stdout'
       );
       return;
     }
@@ -237,11 +240,12 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
     if (output.output_type === 'error') {
       const traceback = output.traceback?.join('\n');
       const summary = [output.ename, output.evalue].filter(Boolean).join(': ');
-      parent.addWidget(
-        Private.textWidget(
-          traceback || summary || 'Unknown error',
-          'jp-JupyterDistributedRankOutput-error'
-        )
+      await this._renderMime(
+        parent,
+        'application/vnd.jupyter.stderr',
+        traceback || summary || 'Unknown error',
+        trusted,
+        'jp-JupyterDistributedRankOutput-error'
       );
       return;
     }
@@ -267,6 +271,25 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
       new MimeModel({
         data,
         metadata: output.metadata ?? {},
+        trusted
+      })
+    );
+  }
+
+  private async _renderMime(
+    parent: Panel,
+    mimeType: string,
+    value: string,
+    trusted: boolean,
+    className: string
+  ): Promise<void> {
+    const renderer = this._rendermime.createRenderer(mimeType);
+    renderer.addClass(className);
+    parent.addWidget(renderer);
+    await renderer.renderModel(
+      new MimeModel({
+        data: { [mimeType]: value },
+        metadata: {},
         trusted
       })
     );
