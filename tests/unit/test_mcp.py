@@ -72,6 +72,12 @@ async def test_reports_live_distributed_notebook_info(
                 "Prefer dedicated MCP tools. Use list_all_commands and execute_command only "
                 "when no dedicated MCP tool covers the operation."
             ),
+            "notebook_file_safety": (
+                "Never edit an .ipynb file directly through filesystem tools. The live "
+                "notebook may contain unsaved user changes that are not present on disk. "
+                "If live notebook or MCP access fails, stop and report the connection problem "
+                "instead of falling back to direct file edits."
+            ),
             "new_bottom_cell_tool": "append_cell",
             "reuses_first_trailing_blank_cell": True,
             "run_existing_cell_tool": "run_cell",
