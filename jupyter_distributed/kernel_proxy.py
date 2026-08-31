@@ -27,18 +27,18 @@ _STREAM_UPDATE_INTERVAL = 0.05
 _RECENT_RANK_SNAPSHOTS = 64
 
 
-def render_plain(execution: GroupExecution) -> str:
+def render_plain(execution: GroupExecution, target_rank: int | None = None) -> str:
     sections: list[str] = []
-    for result in execution.ranks:
+    for result in _visible_ranks(execution, target_rank):
         body = "".join(output.plain_text() for output in result.outputs)
         sections.append(f"[Rank {result.rank} — {result.status}]\n{body}".rstrip())
     return "\n\n".join(sections)
 
 
-def render_html(execution: GroupExecution) -> str:
+def render_html(execution: GroupExecution, target_rank: int | None = None) -> str:
     sections: list[str] = ['<div class="jupyter-distributed-rank-output">']
-    for result in execution.ranks:
-        opened = " open" if result.rank == 0 else ""
+    for index, result in enumerate(_visible_ranks(execution, target_rank)):
+        opened = " open" if index == 0 else ""
         body = html.escape("".join(output.plain_text() for output in result.outputs))
         sections.append(
             f'<details data-rank="{result.rank}" data-status="{result.status}"{opened}>'
@@ -49,6 +49,12 @@ def render_html(execution: GroupExecution) -> str:
     return "".join(sections)
 
 
+def _visible_ranks(execution: GroupExecution, target_rank: int | None) -> tuple[Any, ...]:
+    if target_rank is None:
+        return execution.ranks
+    return tuple(result for result in execution.ranks if result.rank == target_rank)
+
+
 class _LiveRankDisplay:
     """Emit one durable output and publish its live rank snapshots separately."""
 
@@ -57,11 +63,13 @@ class _LiveRankDisplay:
         kernel: SPMDKernel,
         execution_count: int,
         cell_id: str | None,
+        target_rank: int | None,
     ) -> None:
         self._kernel = kernel
         self._execution_count = execution_count
         self._cell_id = cell_id
         self._execution_id = uuid4().hex
+        self._target_rank = target_rank
         self._outputs: dict[int, tuple[RankOutput, ...]] = {
             rank: () for rank in range(kernel.group.world_size)
         }
@@ -97,6 +105,8 @@ class _LiveRankDisplay:
             return
         payload = execution.as_dict()
         payload["execution_id"] = self._execution_id
+        if self._target_rank is not None:
+            payload["target_rank"] = self._target_rank
         if self._started:
             snapshot = self._snapshot(payload, execution=execution)
             self._kernel.live_updates.publish(snapshot)
@@ -117,7 +127,7 @@ class _LiveRankDisplay:
             self._dirty = False
 
     def _live_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "execution_id": self._execution_id,
             "execution_count": self._execution_count,
             "status": "busy",
@@ -131,6 +141,9 @@ class _LiveRankDisplay:
                 for rank, outputs in sorted(self._outputs.items())
             ],
         }
+        if self._target_rank is not None:
+            payload["target_rank"] = self._target_rank
+        return payload
 
     def _snapshot(
         self,
@@ -147,8 +160,8 @@ class _LiveRankDisplay:
         else:
             data = {
                 RANK_MIME: payload,
-                "text/html": render_html(execution),
-                "text/plain": render_plain(execution),
+                "text/html": render_html(execution, self._target_rank),
+                "text/plain": render_plain(execution, self._target_rank),
             }
         return {
             "execution_id": self._execution_id,
@@ -337,6 +350,7 @@ class SPMDKernel(Kernel):
                 self,
                 self.group.execution_count + (1 if store_history else 0),
                 cell_id,
+                target_rank,
             )
         execution = await self.group.execute(
             executed_code,

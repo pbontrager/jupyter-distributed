@@ -108,7 +108,12 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
     trusted: boolean
   ): Promise<void> {
     this._clear();
-    const ranks = Private.normalizePayload(payload);
+    const normalizedRanks = Private.normalizePayload(payload);
+    const targetRank = Private.targetRank(payload);
+    const ranks =
+      targetRank === null
+        ? normalizedRanks
+        : normalizedRanks.filter(rank => rank.rank === targetRank);
     if (ranks.length === 0) {
       this.addWidget(
         Private.textWidget(
@@ -327,6 +332,14 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
 }
 
 namespace Private {
+  export function targetRank(value: unknown): number | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+    const target = Number((value as Record<string, unknown>).target_rank);
+    return Number.isInteger(target) && target >= 0 ? target : null;
+  }
+
   export function createRankPickerNode(): HTMLElement {
     const label = document.createElement('label');
     const text = document.createElement('span');

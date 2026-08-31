@@ -33,6 +33,9 @@ def test_group_execution_aggregates_rank_errors() -> None:
     assert RANK_MIME == "application/vnd.jupyter-distributed.rank+json"
     assert "[Rank 0 — ok]" in render_plain(execution)
     assert 'data-rank="1" data-status="error"' in render_html(execution)
+    assert "Rank 0" not in render_plain(execution, target_rank=1)
+    assert "[Rank 1 — error]" in render_plain(execution, target_rank=1)
+    assert 'data-rank="0"' not in render_html(execution, target_rank=1)
 
 
 def test_rich_output_has_a_plain_fallback() -> None:

@@ -554,8 +554,11 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
         )
         assert reply["status"] == "ok"
         assert data is not None
+        assert data[RANK_MIME]["target_rank"] == 1
         assert data[RANK_MIME]["ranks"][0]["outputs"] == []
         assert data[RANK_MIME]["ranks"][1]["outputs"][-1]["content"]["data"]["text/plain"] == "101"
+        assert "Rank 0" not in data["text/plain"]
+        assert "[Rank 1 — ok]" in data["text/plain"]
 
         reply, data = await execute_through_proxy(
             client,

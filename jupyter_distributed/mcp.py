@@ -540,6 +540,7 @@ def _compact_execution(payload: Mapping[str, Any]) -> dict[str, Any]:
         "execution_count": payload.get("execution_count"),
         "status": payload.get("status"),
         "world_size": payload.get("world_size"),
+        "target_rank": payload.get("target_rank"),
         "ranks": [
             {
                 "rank": rank.get("rank"),
