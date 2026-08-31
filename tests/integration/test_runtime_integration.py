@@ -550,6 +550,19 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
 
         reply, data = await execute_through_proxy(
             client,
+            "import os\nrank = int(os.environ['RANK'])\nraise ValueError(f'failure-{rank}')",
+        )
+        assert reply["status"] == "error"
+        assert data is not None
+        assert data[RANK_MIME]["status"] == "error"
+        assert [rank["status"] for rank in data[RANK_MIME]["ranks"]] == ["error", "error"]
+        assert [rank["outputs"][-1]["content"]["evalue"] for rank in data[RANK_MIME]["ranks"]] == [
+            "failure-0",
+            "failure-1",
+        ]
+
+        reply, data = await execute_through_proxy(
+            client,
             "%%rank 1\nrank_only = saved + 100\nrank_only",
         )
         assert reply["status"] == "ok"

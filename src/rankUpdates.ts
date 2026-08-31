@@ -42,8 +42,8 @@ export class RankOutputController implements IDisposable {
       if (this._disposed) {
         return;
       }
-      panel.content.model?.contentChanged.connect(this._onContentChanged, this);
-      this._applyPending();
+      panel.content.model?.cells.changed.connect(this._onCellsChanged, this);
+      this._watchCellOutputs();
       void this.ensureConnected();
     });
   }
@@ -135,10 +135,11 @@ export class RankOutputController implements IDisposable {
       this._onConnectionStatusChanged,
       this
     );
-    this._panel.content.model?.contentChanged.disconnect(
-      this._onContentChanged,
-      this
-    );
+    this._panel.content.model?.cells.changed.disconnect(this._onCellsChanged, this);
+    for (const outputs of this._watchedOutputs) {
+      outputs.changed.disconnect(this._onOutputsChanged, this);
+    }
+    this._watchedOutputs.clear();
     this._invalidateConnection();
     for (const waiter of this._waiters) {
       window.clearTimeout(waiter.timer);
@@ -310,6 +311,31 @@ export class RankOutputController implements IDisposable {
     }
   }
 
+  private _watchCellOutputs(): void {
+    const cells = this._panel.content.model?.cells;
+    const current = new Set<ICodeCellModel['outputs']>();
+    if (cells) {
+      for (let index = 0; index < cells.length; index++) {
+        const cell = cells.get(index);
+        if (cell.type === 'code') {
+          current.add((cell as ICodeCellModel).outputs);
+        }
+      }
+    }
+    for (const outputs of this._watchedOutputs) {
+      if (!current.has(outputs)) {
+        outputs.changed.disconnect(this._onOutputsChanged, this);
+      }
+    }
+    for (const outputs of current) {
+      if (!this._watchedOutputs.has(outputs)) {
+        outputs.changed.connect(this._onOutputsChanged, this);
+      }
+    }
+    this._watchedOutputs = current;
+    this._applyPending();
+  }
+
   private _scheduleReconnect(): void {
     if (
       this._disposed ||
@@ -340,7 +366,11 @@ export class RankOutputController implements IDisposable {
     }
   };
 
-  private _onContentChanged = (): void => {
+  private _onCellsChanged = (): void => {
+    this._watchCellOutputs();
+  };
+
+  private _onOutputsChanged = (): void => {
     this._applyPending();
   };
 
@@ -366,6 +396,7 @@ export class RankOutputController implements IDisposable {
   private _panel: NotebookPanel;
   private _pending = new Map<string, RankUpdateSnapshot>();
   private _reconnectTimer: number | null = null;
+  private _watchedOutputs = new Set<ICodeCellModel['outputs']>();
   private _waiters = new Set<SnapshotWaiter>();
 }
 
