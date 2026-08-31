@@ -30,6 +30,7 @@ class ProcessSelector extends Widget {
     this._onKernelConfigured = onKernelConfigured;
     this._input = this.node.querySelector('input')!;
 
+    this._input.addEventListener('click', this._onClick);
     this._input.addEventListener('change', this._onChange);
     this._input.addEventListener('keydown', this._onKeyDown);
     panel.sessionContext.sessionChanged.connect(this._onKernelChanged, this);
@@ -46,6 +47,7 @@ class ProcessSelector extends Widget {
     if (this.isDisposed) {
       return;
     }
+    this._input.removeEventListener('click', this._onClick);
     this._input.removeEventListener('change', this._onChange);
     this._input.removeEventListener('keydown', this._onKeyDown);
     this._panel.sessionContext.sessionChanged.disconnect(
@@ -163,9 +165,9 @@ class ProcessSelector extends Widget {
     const previous = Number(this._input.dataset.worldSize ?? '1');
     const rawValue = this._input.value.trim();
     const next = Number(rawValue);
-    this._input.value = String(previous);
 
     if (!/^[1-9]\d*$/.test(rawValue) || !Number.isSafeInteger(next)) {
+      this._setWorldSize(previous);
       await showErrorMessage(
         'Invalid process count',
         'Processes must be a positive integer.'
@@ -195,37 +197,41 @@ class ProcessSelector extends Widget {
     if (!kernelId) {
       throw new Error('The notebook kernel is not connected.');
     }
-    const current = await this._request(kernelId, 'GET');
-    if (kernelId !== this._kernelId()) {
-      throw new Error('The notebook kernel changed while setting processes.');
-    }
-    this._setWorldSize(current.world_size);
-
-    if (current.proxied && next === current.world_size) {
-      this._saveWorldSize(next);
-      await this._onKernelConfigured(this._panel, false);
-      return current;
-    }
-
-    if (confirm) {
-      const result = await showDialog({
-        title: 'Restart kernel processes?',
-        body:
-          `Changing the process count from ${current.world_size} to ${next} ` +
-          'will restart the selected kernel. All in-memory state will be lost.',
-        buttons: [
-          Dialog.cancelButton(),
-          Dialog.warnButton({ label: `Restart with ${next} processes` })
-        ]
-      });
-      if (!result.button.accept) {
-        return null;
-      }
-    }
-
+    const previous = Number(this._input.dataset.worldSize ?? '1');
     this._pending = true;
+    this._input.value = String(next);
     this._syncVisibility();
+    let current: DistributedKernelModel | undefined;
     try {
+      current = await this._request(kernelId, 'GET');
+      if (kernelId !== this._kernelId()) {
+        throw new Error('The notebook kernel changed while setting processes.');
+      }
+
+      if (current.proxied && next === current.world_size) {
+        this._setWorldSize(next);
+        this._saveWorldSize(next);
+        await this._onKernelConfigured(this._panel, false);
+        return current;
+      }
+
+      if (confirm) {
+        const result = await showDialog({
+          title: 'Restart kernel processes?',
+          body:
+            `Changing the process count from ${current.world_size} to ${next} ` +
+            'will restart the selected kernel. All in-memory state will be lost.',
+          buttons: [
+            Dialog.cancelButton(),
+            Dialog.warnButton({ label: `Restart with ${next} processes` })
+          ]
+        });
+        if (!result.button.accept) {
+          this._setWorldSize(current.world_size);
+          return null;
+        }
+      }
+
       const model = await this._request(kernelId, 'POST', {
         world_size: next
       });
@@ -236,6 +242,11 @@ class ProcessSelector extends Widget {
       this._saveWorldSize(model.world_size);
       await this._onKernelConfigured(this._panel, true);
       return model;
+    } catch (error) {
+      if (kernelId === this._kernelId()) {
+        this._setWorldSize(current?.world_size ?? previous);
+      }
+      throw error;
     } finally {
       this._pending = false;
       this._syncVisibility();
@@ -244,6 +255,11 @@ class ProcessSelector extends Widget {
       }
     }
   }
+
+  private _onClick = (): void => {
+    const end = this._input.value.length;
+    this._input.setSelectionRange(end, end);
+  };
 
   private _onKeyDown = (event: KeyboardEvent): void => {
     if (event.key === 'Enter') {
