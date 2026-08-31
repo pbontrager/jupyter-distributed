@@ -34,6 +34,10 @@ class ProcessSelector extends Widget {
     this._input.addEventListener('keydown', this._onKeyDown);
     panel.sessionContext.sessionChanged.connect(this._onKernelChanged, this);
     panel.sessionContext.kernelChanged.connect(this._onKernelChanged, this);
+    panel.sessionContext.connectionStatusChanged.connect(
+      this._onKernelConnectionChanged,
+      this
+    );
     this._syncVisibility();
     void this._initialize();
   }
@@ -52,6 +56,10 @@ class ProcessSelector extends Widget {
       this._onKernelChanged,
       this
     );
+    this._panel.sessionContext.connectionStatusChanged.disconnect(
+      this._onKernelConnectionChanged,
+      this
+    );
     super.dispose();
   }
 
@@ -60,7 +68,8 @@ class ProcessSelector extends Widget {
   }
 
   private _syncVisibility(): void {
-    const connected = this._kernelId() !== undefined;
+    const kernel = this._panel.sessionContext.session?.kernel;
+    const connected = kernel?.connectionStatus === 'connected';
     this.setHidden(false);
     this._input.disabled = !connected || this._pending;
     this.node.title = connected
@@ -71,6 +80,18 @@ class ProcessSelector extends Widget {
   private _onKernelChanged = (): void => {
     this._syncVisibility();
     if (this._ready && !this._pending) {
+      void this._syncFromServer();
+    }
+  };
+
+  private _onKernelConnectionChanged = (): void => {
+    this._syncVisibility();
+    if (
+      this._ready &&
+      !this._pending &&
+      this._panel.sessionContext.session?.kernel?.connectionStatus ===
+        'connected'
+    ) {
       void this._syncFromServer();
     }
   };

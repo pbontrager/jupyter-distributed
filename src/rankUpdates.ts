@@ -28,7 +28,7 @@ export function executionId(value: unknown): string | null {
   return typeof id === 'string' && id ? id : null;
 }
 
-/** Owns rank-output state and the update comm for one notebook panel. */
+/** Observes rank snapshots for agent commands without mutating notebook output. */
 export class RankOutputController implements IDisposable {
   constructor(panel: NotebookPanel) {
     this._panel = panel;

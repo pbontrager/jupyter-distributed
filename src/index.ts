@@ -41,14 +41,12 @@ const notebookPlugin: JupyterFrontEndPlugin<void> = {
     const processControls = new ProcessToolbarExtension(
       async (panel, restarted) => {
         const controller = controllerFor(panel);
-        const connected = restarted
-          ? await controller.reconnect()
-          : await controller.ensureConnected();
-        if (!connected) {
-          throw new Error(
-            'The distributed output channel did not connect after the kernel restart.'
-          );
-        }
+        // Output rendering uses Jupyter's standard display-update channel.
+        // Reconnect the auxiliary agent-results comm without blocking process
+        // controls or treating a comm outage as a failed kernel operation.
+        void (restarted
+          ? controller.reconnect()
+          : controller.ensureConnected());
       }
     );
 
