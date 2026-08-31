@@ -475,9 +475,10 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
         live_comm_id = open_rank_update_comm(client)
         live_id = client.execute(
             "import time\n"
-            "print('started', flush=True)\n"
-            "time.sleep(0.5)\n"
-            "print('finished', flush=True)"
+            "for token in ['Tensor', ' parallel', ' streaming', ' works']:\n"
+            "    print(token, end='', flush=True)\n"
+            "    time.sleep(0.1)\n"
+            "print()"
         )
         saw_live_output = False
         final_snapshot = None
@@ -493,7 +494,7 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
                 payload = snapshot.get("data", {}).get(RANK_MIME) if snapshot else None
                 if payload and payload["status"] == "busy":
                     text = str(payload["ranks"][0]["outputs"])
-                    saw_live_output = saw_live_output or "started" in text
+                    saw_live_output = saw_live_output or "Tensor" in text
                 if snapshot and snapshot.get("final"):
                     final_snapshot = snapshot
             if message.get("parent_header", {}).get("msg_id") != live_id:
@@ -514,6 +515,11 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
         assert output_messages[0]["content"]["data"][RANK_MIME]["status"] == "busy"
         assert output_messages[-1]["content"]["data"][RANK_MIME]["status"] == "ok"
         assert len(output_messages[-1]["content"]["data"][RANK_MIME]["ranks"]) == 2
+        final_outputs = output_messages[-1]["content"]["data"][RANK_MIME]["ranks"]
+        assert [rank["outputs"][0]["content"]["text"] for rank in final_outputs] == [
+            "Tensor parallel streaming works\n",
+            "Tensor parallel streaming works\n",
+        ]
 
         reconnect_comm_id = open_rank_update_comm(client)
         restored_message = await iopub_message(
