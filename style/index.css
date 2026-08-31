@@ -120,11 +120,6 @@
   white-space: pre-wrap;
 }
 
-.jp-JupyterDistributedRankOutput-stderr,
-.jp-JupyterDistributedRankOutput-error {
-  color: var(--jp-error-color1);
-}
-
 .jp-JupyterDistributedRankOutput-empty {
   color: var(--jp-ui-font-color2);
   font-style: italic;

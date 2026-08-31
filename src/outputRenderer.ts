@@ -1,5 +1,8 @@
-import { IRenderMimeRegistry, MimeModel } from '@jupyterlab/rendermime';
+import type * as nbformat from '@jupyterlab/nbformat';
+import { OutputArea, OutputAreaModel } from '@jupyterlab/outputarea';
+import { IRenderMimeRegistry } from '@jupyterlab/rendermime';
 import { IRenderMime } from '@jupyterlab/rendermime-interfaces';
+import { JSONExt } from '@lumino/coreutils';
 import { Signal } from '@lumino/signaling';
 import { Panel, Widget } from '@lumino/widgets';
 
@@ -9,27 +12,15 @@ import { executionId } from './rankUpdates';
 export const MIME_TYPE = RANK_MIME_TYPE;
 const MIN_RANK_TAB_WIDTH = 72;
 
-type OutputType =
-  | 'stream'
-  | 'execute_result'
-  | 'display_data'
-  | 'error';
-
-interface RankOutput {
-  output_type: OutputType;
-  name?: 'stdout' | 'stderr';
-  text?: string | string[];
-  data?: IRenderMime.IMimeModel['data'];
-  metadata?: IRenderMime.IMimeModel['metadata'];
-  ename?: string;
-  evalue?: string;
-  traceback?: string[];
-}
-
 interface RankRecord {
   rank: number;
-  outputs: RankOutput[];
+  outputs: nbformat.IOutput[];
   error: boolean;
+}
+
+interface RankView {
+  area: OutputArea;
+  model: OutputAreaModel;
 }
 
 /** Stores the selected rank independently for each logical cell execution. */
@@ -79,7 +70,6 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
   }
 
   async renderModel(model: IRenderMime.IMimeModel): Promise<void> {
-    this._executionId = executionId(model.data[this._mimeType]);
     await this._queueRender(model.data[this._mimeType], model.trusted);
   }
 
@@ -107,7 +97,6 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
     payload: unknown,
     trusted: boolean
   ): Promise<void> {
-    this._clear();
     const normalizedRanks = Private.normalizePayload(payload);
     const targetRank = Private.targetRank(payload);
     const ranks =
@@ -115,6 +104,7 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
         ? normalizedRanks
         : normalizedRanks.filter(rank => rank.rank === targetRank);
     if (ranks.length === 0) {
+      this._clear();
       this.addWidget(
         Private.textWidget(
           'No rank output was provided.',
@@ -124,70 +114,41 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
       return;
     }
     if (ranks.every(rank => rank.outputs.length === 0)) {
+      this._clear();
       return;
     }
 
-    this._ranks = ranks.map(item => item.rank);
-    this._executionId = executionId(payload);
-    const firstOutputRank = ranks.find(rank => rank.outputs.length > 0)?.rank;
-    const remembered = this._selections.has(this._executionId)
-      ? this._selections.get(this._executionId)
-      : (firstOutputRank ?? this._selectedRank);
-    this._selectedRank = this._ranks.includes(remembered)
-      ? remembered
-      : this._ranks[0];
-
-    if (ranks.length > 1) {
-      const tabs = new Widget({ node: document.createElement('div') });
-      tabs.addClass('jp-JupyterDistributedRankOutput-tabs');
-      tabs.node.setAttribute('role', 'tablist');
-      this._tabs = tabs;
-      this.addWidget(tabs);
-
-      const picker = new Widget({ node: Private.createRankPickerNode() });
-      picker.addClass('jp-JupyterDistributedRankOutput-picker');
-      this._rankSelect = picker.node.querySelector('select')!;
-      this._rankSelect.addEventListener('change', this._onDropdownChange);
-      this.addWidget(picker);
+    const nextExecutionId = executionId(payload);
+    const nextRanks = ranks.map(item => item.rank);
+    const nextLayoutKey = JSON.stringify({
+      executionId: nextExecutionId,
+      ranks: nextRanks,
+      targetRank
+    });
+    if (nextLayoutKey !== this._layoutKey) {
+      this._clear();
+      this._layoutKey = nextLayoutKey;
+      this._executionId = nextExecutionId;
+      this._ranks = nextRanks;
+      const firstOutputRank = ranks.find(rank => rank.outputs.length > 0)?.rank;
+      const remembered = this._selections.has(this._executionId)
+        ? this._selections.get(this._executionId)
+        : (firstOutputRank ?? this._selectedRank);
+      this._selectedRank = this._ranks.includes(remembered)
+        ? remembered
+        : this._ranks[0];
+      this._createNavigation(ranks);
+      for (const rank of ranks) {
+        this._createRankView(rank.rank, trusted);
+      }
     }
 
     for (const rank of ranks) {
-      if (this._tabs) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.textContent = `Rank ${rank.rank}`;
-        button.dataset.rank = String(rank.rank);
-        button.className = 'jp-JupyterDistributedRankOutput-tab';
-        button.setAttribute('role', 'tab');
-        if (rank.error) {
-          button.classList.add('jp-mod-error');
-          button.title = `Rank ${rank.rank} produced an error`;
-        }
-        button.addEventListener('click', () => {
-          this._selections.set(this._executionId, rank.rank);
-          this._select(rank.rank);
-        });
-        this._tabs.node.appendChild(button);
-      }
-
-      if (this._rankSelect) {
-        const option = document.createElement('option');
-        option.value = String(rank.rank);
-        option.textContent = rank.error
-          ? `Rank ${rank.rank} — error`
-          : `Rank ${rank.rank}`;
-        this._rankSelect.appendChild(option);
-      }
-
-      const content = new Panel();
-      content.addClass('jp-JupyterDistributedRankOutput-rank');
-      content.node.dataset.rank = String(rank.rank);
-      content.node.setAttribute('role', 'tabpanel');
-      this.addWidget(content);
-      this._content.set(rank.rank, content);
-
-      for (const output of rank.outputs) {
-        await this._renderOutput(content, output, trusted);
+      this._updateRankStatus(rank);
+      const view = this._rankViews.get(rank.rank);
+      if (view) {
+        view.model.trusted = trusted;
+        Private.syncOutputs(view.model, rank.outputs);
       }
     }
 
@@ -210,89 +171,88 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
     while (this.widgets.length > 0) {
       this.widgets[0].dispose();
     }
-    this._content.clear();
+    for (const view of this._rankViews.values()) {
+      view.model.dispose();
+    }
+    this._rankViews.clear();
+    this._executionId = null;
     this._ranks = [];
     this._tabs = null;
     this._rankSelect = null;
+    this._layoutKey = null;
   }
 
-  private async _renderOutput(
-    parent: Panel,
-    output: RankOutput,
-    trusted: boolean
-  ): Promise<void> {
-    if (output.output_type === 'stream') {
-      const text = Private.asText(output.text);
-      await this._renderMime(
-        parent,
-        output.name === 'stderr'
-          ? 'application/vnd.jupyter.stderr'
-          : 'application/vnd.jupyter.stdout',
-        text,
-        trusted,
-        output.name === 'stderr'
-          ? 'jp-JupyterDistributedRankOutput-stderr'
-          : 'jp-JupyterDistributedRankOutput-stdout'
-      );
+  private _createNavigation(ranks: RankRecord[]): void {
+    if (ranks.length <= 1) {
       return;
     }
+    const tabs = new Widget({ node: document.createElement('div') });
+    tabs.addClass('jp-JupyterDistributedRankOutput-tabs');
+    tabs.node.setAttribute('role', 'tablist');
+    this._tabs = tabs;
+    this.addWidget(tabs);
 
-    if (output.output_type === 'error') {
-      const traceback = output.traceback?.join('\n');
-      const summary = [output.ename, output.evalue].filter(Boolean).join(': ');
-      await this._renderMime(
-        parent,
-        'application/vnd.jupyter.stderr',
-        traceback || summary || 'Unknown error',
-        trusted,
-        'jp-JupyterDistributedRankOutput-error'
-      );
-      return;
+    const picker = new Widget({ node: Private.createRankPickerNode() });
+    picker.addClass('jp-JupyterDistributedRankOutput-picker');
+    this._rankSelect = picker.node.querySelector('select')!;
+    this._rankSelect.addEventListener('change', this._onDropdownChange);
+    this.addWidget(picker);
+
+    for (const rank of ranks) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = `Rank ${rank.rank}`;
+      button.dataset.rank = String(rank.rank);
+      button.className = 'jp-JupyterDistributedRankOutput-tab';
+      button.setAttribute('role', 'tab');
+      button.addEventListener('click', () => {
+        this._selections.set(this._executionId, rank.rank);
+        this._select(rank.rank);
+      });
+      tabs.node.appendChild(button);
+
+      const option = document.createElement('option');
+      option.value = String(rank.rank);
+      this._rankSelect.appendChild(option);
     }
-
-    const data = output.data ?? {};
-    const mimeType = this._rendermime.preferredMimeType(
-      data,
-      trusted ? 'any' : 'ensure'
-    );
-    if (!mimeType) {
-      parent.addWidget(
-        Private.textWidget(
-          JSON.stringify(data, null, 2),
-          'jp-JupyterDistributedRankOutput-plain'
-        )
-      );
-      return;
-    }
-
-    const renderer = this._rendermime.createRenderer(mimeType);
-    parent.addWidget(renderer);
-    await renderer.renderModel(
-      new MimeModel({
-        data,
-        metadata: output.metadata ?? {},
-        trusted
-      })
-    );
   }
 
-  private async _renderMime(
-    parent: Panel,
-    mimeType: string,
-    value: string,
-    trusted: boolean,
-    className: string
-  ): Promise<void> {
-    const renderer = this._rendermime.createRenderer(mimeType);
-    renderer.addClass(className);
-    parent.addWidget(renderer);
-    await renderer.renderModel(
-      new MimeModel({
-        data: { [mimeType]: value },
-        metadata: {},
-        trusted
-      })
+  private _createRankView(rank: number, trusted: boolean): void {
+    // Keep JupyterLab's native output model and widget alive for the duration
+    // of an execution. Snapshot updates mutate the model instead of replacing
+    // renderers, preserving widget views and third-party MIME behavior.
+    const model = new OutputAreaModel({ trusted });
+    const area = new OutputArea({
+      model,
+      rendermime: this._rendermime,
+      promptOverlay: false,
+      showInputPlaceholder: false
+    });
+    area.addClass('jp-JupyterDistributedRankOutput-rank');
+    area.node.dataset.rank = String(rank);
+    area.node.setAttribute('role', 'tabpanel');
+    this.addWidget(area);
+    this._rankViews.set(rank, { area, model });
+  }
+
+  private _updateRankStatus(rank: RankRecord): void {
+    const button = this._tabs?.node.querySelector<HTMLButtonElement>(
+      `[data-rank="${rank.rank}"]`
     );
+    if (button) {
+      button.classList.toggle('jp-mod-error', rank.error);
+      button.title = rank.error
+        ? `Rank ${rank.rank} produced an error`
+        : '';
+    }
+    const option = this._rankSelect?.querySelector<HTMLOptionElement>(
+      `option[value="${rank.rank}"]`
+    );
+    if (option) {
+      option.textContent = rank.error
+        ? `Rank ${rank.rank} — error`
+        : `Rank ${rank.rank}`;
+    }
   }
 
   private _select(rank: number): void {
@@ -310,8 +270,8 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
     if (this._rankSelect) {
       this._rankSelect.value = String(rank);
     }
-    for (const [candidate, content] of this._content) {
-      content.setHidden(candidate !== rank);
+    for (const [candidate, view] of this._rankViews) {
+      view.area.setHidden(candidate !== rank);
     }
   }
 
@@ -340,11 +300,12 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
     this.toggleClass('jp-mod-rankDropdown', useDropdown);
   }
 
-  private _content = new Map<number, Panel>();
   private _executionId: string | null = null;
+  private _layoutKey: string | null = null;
   private _mimeType: string;
   private _pendingRender: { payload: unknown; trusted: boolean } | null = null;
   private _rankSelect: HTMLSelectElement | null = null;
+  private _rankViews = new Map<number, RankView>();
   private _ranks: number[] = [];
   private _rendermime: IRenderMimeRegistry;
   private _rendering = false;
@@ -429,7 +390,7 @@ namespace Private {
         : [];
     const outputs = rawOutputs
       .map(normalizeOutput)
-      .filter((item): item is RankOutput => item !== null);
+      .filter((item): item is nbformat.IOutput => item !== null);
     return {
       rank,
       outputs,
@@ -440,7 +401,7 @@ namespace Private {
     };
   }
 
-  function normalizeOutput(value: unknown): RankOutput | null {
+  function normalizeOutput(value: unknown): nbformat.IOutput | null {
     if (!value || typeof value !== 'object') {
       return null;
     }
@@ -467,17 +428,36 @@ namespace Private {
       record.content && typeof record.content === 'object'
         ? (record.content as Record<string, unknown>)
         : record;
-    return {
+    const output = {
       ...content,
       output_type: outputType,
       ...(discriminator === 'stdout' || discriminator === 'stderr'
         ? { name: discriminator }
         : {})
-    } as unknown as RankOutput;
+    } as unknown as nbformat.IOutput;
+    if (output.output_type === 'stream' && Array.isArray(output.text)) {
+      output.text = output.text.join('');
+    }
+    delete (output as unknown as Record<string, unknown>).transient;
+    return output;
   }
 
-  export function asText(value: string | string[] | undefined): string {
-    return Array.isArray(value) ? value.join('') : (value ?? '');
+  export function syncOutputs(
+    model: OutputAreaModel,
+    outputs: nbformat.IOutput[]
+  ): void {
+    const commonLength = Math.min(model.length, outputs.length);
+    for (let index = 0; index < commonLength; index++) {
+      if (!JSONExt.deepEqual(model.get(index).toJSON(), outputs[index])) {
+        model.set(index, outputs[index]);
+      }
+    }
+    while (model.length > outputs.length) {
+      model.remove(model.length - 1);
+    }
+    for (let index = model.length; index < outputs.length; index++) {
+      model.add(outputs[index]);
+    }
   }
 
   export function textWidget(text: string, className: string): Widget {

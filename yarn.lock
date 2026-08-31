@@ -771,7 +771,7 @@
     "@mermaid-js/layout-elk" "^0.2.1"
     mermaid "^11.15.0"
 
-"@jupyterlab/nbformat@^3.0.0 || ^4.0.0-alpha.21 || ^4.0.0", "@jupyterlab/nbformat@^4.6.3":
+"@jupyterlab/nbformat@^3.0.0 || ^4.0.0-alpha.21 || ^4.0.0", "@jupyterlab/nbformat@^4.0.0", "@jupyterlab/nbformat@^4.6.3":
   version "4.6.3"
   resolved "https://registry.yarnpkg.com/@jupyterlab/nbformat/-/nbformat-4.6.3.tgz#312eabd26c711d153cc67400781dc9b7a6dacc7b"
   integrity sha512-MohoKGpjsqX0xXnnEt/HCzCLVYSLQyhmOktw2EipdzqJW59Y5SCZAQdILzYuvkEVtKmsXWRskIBTf5mG3bgflQ==
@@ -827,7 +827,7 @@
     "@lumino/messaging" "^2.0.4"
     "@lumino/signaling" "^2.1.5"
 
-"@jupyterlab/outputarea@^4.6.3":
+"@jupyterlab/outputarea@^4.0.0", "@jupyterlab/outputarea@^4.6.3":
   version "4.6.3"
   resolved "https://registry.yarnpkg.com/@jupyterlab/outputarea/-/outputarea-4.6.3.tgz#90d843acb0799241503bf09bc3c9be3bf5e5d3d0"
   integrity sha512-TKrQlq+maMXDSetrin55/cL+7sAw2TGRWJr6VOi8Gm/vl62+z5euUlZAlkZ2MPznGhSwos+wPDg9D+J3zbHprg==
