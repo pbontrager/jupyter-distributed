@@ -1,10 +1,9 @@
-import { ICodeCellModel } from '@jupyterlab/cells';
 import { NotebookPanel } from '@jupyterlab/notebook';
 import { IRenderMime } from '@jupyterlab/rendermime-interfaces';
 import { Kernel, KernelMessage } from '@jupyterlab/services';
 import { IDisposable } from '@lumino/disposable';
 
-import { RANK_MIME_TYPE, RANK_UPDATE_COMM_TARGET } from './constants';
+import { RANK_UPDATE_COMM_TARGET } from './constants';
 
 export interface RankUpdateSnapshot {
   execution_id: string;
@@ -42,8 +41,6 @@ export class RankOutputController implements IDisposable {
       if (this._disposed) {
         return;
       }
-      panel.content.model?.cells.changed.connect(this._onCellsChanged, this);
-      this._watchCellOutputs();
       void this.ensureConnected();
     });
   }
@@ -135,11 +132,6 @@ export class RankOutputController implements IDisposable {
       this._onConnectionStatusChanged,
       this
     );
-    this._panel.content.model?.cells.changed.disconnect(this._onCellsChanged, this);
-    for (const outputs of this._watchedOutputs) {
-      outputs.changed.disconnect(this._onOutputsChanged, this);
-    }
-    this._watchedOutputs.clear();
     this._invalidateConnection();
     for (const waiter of this._waiters) {
       window.clearTimeout(waiter.timer);
@@ -258,9 +250,6 @@ export class RankOutputController implements IDisposable {
     if (snapshot.cell_id) {
       this._cellExecutions.set(snapshot.cell_id, snapshot);
     }
-    if (!this._apply(snapshot) && snapshot.cell_id) {
-      this._pending.set(snapshot.execution_id, snapshot);
-    }
     if (snapshot.final && snapshot.cell_id) {
       for (const waiter of [...this._waiters]) {
         if (
@@ -273,67 +262,6 @@ export class RankOutputController implements IDisposable {
         }
       }
     }
-  }
-
-  private _apply(snapshot: RankUpdateSnapshot): boolean {
-    if (!snapshot.cell_id) {
-      return false;
-    }
-    const cells = this._panel.content.model?.cells;
-    if (!cells) {
-      return false;
-    }
-    let cell: ICodeCellModel | null = null;
-    for (let index = 0; index < cells.length; index++) {
-      const candidate = cells.get(index);
-      if (candidate.id === snapshot.cell_id && candidate.type === 'code') {
-        cell = candidate as ICodeCellModel;
-        break;
-      }
-    }
-    if (!cell) {
-      return false;
-    }
-    for (let index = 0; index < cell.outputs.length; index++) {
-      const output = cell.outputs.get(index);
-      if (executionId(output.data[RANK_MIME_TYPE]) === snapshot.execution_id) {
-        this._pending.delete(snapshot.execution_id);
-        output.setData({ data: snapshot.data, metadata: snapshot.metadata });
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private _applyPending(): void {
-    for (const snapshot of [...this._pending.values()]) {
-      this._apply(snapshot);
-    }
-  }
-
-  private _watchCellOutputs(): void {
-    const cells = this._panel.content.model?.cells;
-    const current = new Set<ICodeCellModel['outputs']>();
-    if (cells) {
-      for (let index = 0; index < cells.length; index++) {
-        const cell = cells.get(index);
-        if (cell.type === 'code') {
-          current.add((cell as ICodeCellModel).outputs);
-        }
-      }
-    }
-    for (const outputs of this._watchedOutputs) {
-      if (!current.has(outputs)) {
-        outputs.changed.disconnect(this._onOutputsChanged, this);
-      }
-    }
-    for (const outputs of current) {
-      if (!this._watchedOutputs.has(outputs)) {
-        outputs.changed.connect(this._onOutputsChanged, this);
-      }
-    }
-    this._watchedOutputs = current;
-    this._applyPending();
   }
 
   private _scheduleReconnect(): void {
@@ -366,14 +294,6 @@ export class RankOutputController implements IDisposable {
     }
   };
 
-  private _onCellsChanged = (): void => {
-    this._watchCellOutputs();
-  };
-
-  private _onOutputsChanged = (): void => {
-    this._applyPending();
-  };
-
   private _onMessage = (message: KernelMessage.ICommMsgMsg): void => {
     const data = message.content.data as Record<string, unknown>;
     if (data.method === 'update') {
@@ -394,9 +314,7 @@ export class RankOutputController implements IDisposable {
   private _generation = 0;
   private _kernel: Kernel.IKernelConnection | null = null;
   private _panel: NotebookPanel;
-  private _pending = new Map<string, RankUpdateSnapshot>();
   private _reconnectTimer: number | null = null;
-  private _watchedOutputs = new Set<ICodeCellModel['outputs']>();
   private _waiters = new Set<SnapshotWaiter>();
 }
 
