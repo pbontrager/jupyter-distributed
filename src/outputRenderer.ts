@@ -446,14 +446,37 @@ namespace Private {
     model: OutputAreaModel,
     outputs: nbformat.IOutput[]
   ): void {
-    const commonLength = Math.min(model.length, outputs.length);
-    for (let index = 0; index < commonLength; index++) {
-      if (!JSONExt.deepEqual(model.get(index).toJSON(), outputs[index])) {
-        model.set(index, outputs[index]);
-      }
-    }
     while (model.length > outputs.length) {
       model.remove(model.length - 1);
+    }
+    const commonLength = Math.min(model.length, outputs.length);
+    for (let index = 0; index < commonLength; index++) {
+      const currentModel = model.get(index);
+      const current = currentModel.toJSON();
+      const next = outputs[index];
+      if (JSONExt.deepEqual(current, next)) {
+        continue;
+      }
+      if (
+        current.output_type === 'stream' &&
+        next.output_type === 'stream' &&
+        current.name === next.name &&
+        index === model.length - 1
+      ) {
+        const currentText = currentModel.streamText?.text ?? '';
+        const nextText = asText(next.text);
+        if (nextText.startsWith(currentText)) {
+          model.appendStreamOutput(nextText.slice(currentText.length));
+        } else {
+          // Snapshot transport has already applied carriage returns and
+          // backspaces. Recreate only this stream renderer when its text was
+          // rewritten; ordinary append-only streams stay fully incremental.
+          model.remove(index);
+          model.add(next);
+        }
+      } else {
+        model.set(index, next);
+      }
     }
     for (let index = model.length; index < outputs.length; index++) {
       model.add(outputs[index]);
@@ -467,5 +490,9 @@ namespace Private {
     widget.addClass('jp-JupyterDistributedRankOutput-text');
     widget.addClass(className);
     return widget;
+  }
+
+  function asText(value: unknown): string {
+    return Array.isArray(value) ? value.join('') : String(value ?? '');
   }
 }
