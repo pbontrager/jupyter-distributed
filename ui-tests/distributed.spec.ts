@@ -91,6 +91,19 @@ async function selectOutputRank(
     .click();
 }
 
+async function expectSelectedOutputRank(
+  output: Locator,
+  rank: number
+): Promise<void> {
+  const tab = output
+    .locator('.lm-TabBar-tab')
+    .filter({ hasText: `Rank ${rank}` });
+  await expect(tab).toHaveClass(/lm-mod-current/);
+  expect(
+    await tab.evaluate(element => getComputedStyle(element).borderBottomColor)
+  ).not.toBe('rgba(0, 0, 0, 0)');
+}
+
 test.describe('distributed notebook rendering', () => {
   test('streams terminal output, isolates ranks, and reconnects', async ({
     page
@@ -138,6 +151,7 @@ test.describe('distributed notebook rendering', () => {
     );
     await expect(rankZeroOutput).toBeVisible();
     await expect(rankOneOutput).toBeHidden();
+    await expectSelectedOutputRank(output, 0);
     await expect(rankZeroOutput).toContainText('progress-0-0');
     await expect(rankOneOutput).toContainText('progress-1-0');
     await expect(output).not.toContainText('end-0');
@@ -157,6 +171,7 @@ test.describe('distributed notebook rendering', () => {
     await selectOutputRank(output, 1);
     await expect(rankZeroOutput).toBeHidden();
     await expect(rankOneOutput).toBeVisible();
+    await expectSelectedOutputRank(output, 1);
     await expect(rankOneOutput).toContainText('env-1-2');
     await expect(rankOneOutput).toContainText('progress-1-2');
     await expect(rankOneOutput).toContainText('end-1');

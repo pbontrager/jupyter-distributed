@@ -101,12 +101,12 @@
 }
 
 .jp-JupyterDistributedRankOutput-tabs .lm-TabBar-tab:hover,
-.jp-JupyterDistributedRankOutput-tabs .lm-TabBar-tab.jp-mod-current {
+.jp-JupyterDistributedRankOutput-tabs .lm-TabBar-tab.lm-mod-current {
   background: var(--jp-layout-color2);
   color: var(--jp-ui-font-color1);
 }
 
-.jp-JupyterDistributedRankOutput-tabs .lm-TabBar-tab.jp-mod-current {
+.jp-JupyterDistributedRankOutput-tabs .lm-TabBar-tab.lm-mod-current {
   border-bottom-color: var(--jp-brand-color1);
 }
 
@@ -115,7 +115,7 @@
 }
 
 .jp-JupyterDistributedRankOutput-tabs
-  .lm-TabBar-tab.jp-mod-error.jp-mod-current {
+  .lm-TabBar-tab.jp-mod-error.lm-mod-current {
   border-bottom-color: var(--jp-error-color1);
 }
 
