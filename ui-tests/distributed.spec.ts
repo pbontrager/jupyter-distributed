@@ -358,6 +358,11 @@ test.describe('distributed notebook rendering', () => {
       timeout: 30000
     });
     await page.sidebar.openTab('jp-debugger-sidebar');
+    // The toolbar button becomes pressed before its asynchronous attach flow
+    // has finished. Variables are populated only after attach completes.
+    await expect(
+      page.locator('.jp-DebuggerVariables-body').getByRole('treeitem').first()
+    ).toBeVisible({ timeout: 30000 });
 
     const debugCell = await addCodeCell(
       page,
