@@ -140,7 +140,9 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
       const firstOutputRank = ranks.find(rank => rank.outputs.length > 0)?.rank;
       const remembered = this._selections.has(this._executionId)
         ? this._selections.get(this._executionId)
-        : (firstOutputRank ?? this._selectedRank);
+        : this._ranks.includes(0)
+          ? 0
+          : (firstOutputRank ?? this._selectedRank);
       this._selectedRank = this._ranks.includes(remembered)
         ? remembered
         : this._ranks[0];

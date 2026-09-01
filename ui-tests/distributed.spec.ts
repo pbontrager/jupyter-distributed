@@ -216,6 +216,38 @@ test.describe('distributed notebook rendering', () => {
         .count()
     ).toBe(1);
 
+    // jupyter-server-documents 0.3.x can append an update_display_data
+    // snapshot as another display_data output when its outputs service is
+    // disabled. Reproduce that model state and verify the extension folds the
+    // snapshot into the existing output instead of mounting another renderer.
+    const reconciledOutputCount = await page.evaluate(index => {
+      const panel = window.galata.app.shell.currentWidget as unknown as {
+        content: {
+          model: {
+            cells: {
+              get(cellIndex: number): {
+                outputs: {
+                  length: number;
+                  add(output: unknown): number;
+                  toJSON(): unknown[];
+                };
+              };
+            };
+          };
+        };
+      };
+      const outputs = panel.content.model.cells.get(index).outputs;
+      outputs.add(outputs.toJSON()[0]);
+      return outputs.length;
+    }, progressCell);
+    expect(reconciledOutputCount).toBe(1);
+    await expect(progressOutput).toHaveCount(1);
+    expect(
+      await rankOneProgress
+        .getByText("'MODEL_ARCHITECTURE_1'", { exact: true })
+        .count()
+    ).toBe(1);
+
     const rankOnlyCell = await addCodeCell(
       page,
       [

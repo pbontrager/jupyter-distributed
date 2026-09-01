@@ -16,6 +16,7 @@ import {
 } from './outputRenderer';
 import { RANK_MIME_TYPE } from './constants';
 import { DebuggerRankSelector } from './debuggerRank';
+import { DistributedOutputReconciler } from './outputReconciler';
 import { ProcessToolbarController } from './toolbar';
 
 const notebookPlugin: JupyterFrontEndPlugin<void> = {
@@ -118,6 +119,7 @@ const notebookPlugin: JupyterFrontEndPlugin<void> = {
 
     rendermime.addFactory(Private.rendererFactory(rendermime, rankSelections), 0);
 
+    const reconciledPanels = new WeakSet<NotebookPanel>();
     const registerNotebookRenderer = (panel: NotebookPanel): void => {
       const contextual = panel.content.rendermime;
       contextual.removeMimeType(MIME_TYPE);
@@ -125,6 +127,10 @@ const notebookPlugin: JupyterFrontEndPlugin<void> = {
         Private.rendererFactory(contextual, rankSelections),
         0
       );
+      if (!reconciledPanels.has(panel)) {
+        reconciledPanels.add(panel);
+        new DistributedOutputReconciler(panel);
+      }
     };
     notebooks.forEach(registerNotebookRenderer);
     notebooks.widgetAdded.connect((_sender, panel) => {
