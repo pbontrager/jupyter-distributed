@@ -134,67 +134,6 @@ async function waitForDebuggerStarted(
 }
 
 test.describe('distributed notebook rendering', () => {
-  test('reconciles cumulative token and progress streams without duplicates', async ({
-    page
-  }) => {
-    expect(
-      await page.notebook.createNew('stream-reconciliation.ipynb', {
-        kernel: 'python3'
-      })
-    ).toBe('stream-reconciliation.ipynb');
-
-    await setCodeCell(
-      page,
-      0,
-      [
-        'import time',
-        'for token in ["Tensor", " parallel", " streaming", " works"]:',
-        '    print(token, end="", flush=True)',
-        '    time.sleep(0.15)',
-        'print()'
-      ].join('\n')
-    );
-    await page.notebook.runCell(0, { inplace: true });
-
-    const tokenOutput = await cellOutput(page, 0);
-    const tokenRank = tokenOutput.locator(
-      '.jp-JupyterDistributedRankOutput-rank[data-rank="0"]'
-    );
-    await expect(tokenOutput).toHaveCount(1);
-    await expect(tokenRank.locator('.jp-OutputArea-output')).toHaveCount(1);
-    await expect(tokenRank.locator('.jp-RenderedText pre')).toHaveText(
-      'Tensor parallel streaming works\n'
-    );
-
-    const progressCell = await addCodeCell(
-      page,
-      [
-        'import sys, time',
-        'for progress in ["0%", "50%", "100%"]:',
-        '    sys.stderr.write(f"\\rLoading weights: {progress}")',
-        '    sys.stderr.flush()',
-        '    time.sleep(0.15)',
-        'sys.stderr.write("\\n")',
-        'sys.stderr.flush()',
-        '"MODEL_ARCHITECTURE"'
-      ].join('\n')
-    );
-    await page.notebook.runCell(progressCell, { inplace: true });
-
-    const progressOutput = await cellOutput(page, progressCell);
-    const progressRank = progressOutput.locator(
-      '.jp-JupyterDistributedRankOutput-rank[data-rank="0"]'
-    );
-    await expect(progressOutput).toHaveCount(1);
-    await expect(progressRank.locator('.jp-OutputArea-output')).toHaveCount(2);
-    await expect(progressRank).toContainText('Loading weights: 100%');
-    await expect(progressRank).not.toContainText('Loading weights: 0%');
-    await expect(progressRank).not.toContainText('Loading weights: 50%');
-    expect(
-      await progressRank.getByText("'MODEL_ARCHITECTURE'", { exact: true }).count()
-    ).toBe(1);
-  });
-
   test('streams terminal output, isolates ranks, and reconnects', async ({
     page
   }) => {
@@ -213,6 +152,10 @@ test.describe('distributed notebook rendering', () => {
         'rank = int(os.environ["RANK"])',
         'world_size = int(os.environ["WORLD_SIZE"])',
         'print(f"env-{rank}-{world_size}", flush=True)',
+        'for token in ["Tensor", " parallel", " streaming", " works"]:',
+        '    print(token, end="", flush=True)',
+        '    time.sleep(0.15)',
+        'print()',
         'sys.stderr.write(f"progress-{rank}-0")',
         'sys.stderr.flush()',
         'while not Path("stream-output-update.gate").exists():',
@@ -244,9 +187,16 @@ test.describe('distributed notebook rendering', () => {
       true
     );
     await page.notebook.waitForRun(0);
+    await expect(output).toHaveCount(1);
     await expect(output).toContainText('end-0');
+    await expect(rankZeroOutput.locator('.jp-OutputArea-output')).toHaveCount(3);
     await expect(output).toContainText('progress-0-2');
     await expect(output).not.toContainText('progress-0-0');
+    const rankZeroText = (await rankZeroOutput.textContent()) ?? '';
+    expect(rankZeroText.match(/Tensor parallel streaming works/g)).toHaveLength(
+      1
+    );
+    expect(rankZeroText.match(/progress-0-2/g)).toHaveLength(1);
     await expect(output.locator('.lm-TabBar-tab')).toHaveCount(2);
     await selectOutputRank(output, 1);
     await expect(rankZeroOutput).toBeHidden();
@@ -254,6 +204,12 @@ test.describe('distributed notebook rendering', () => {
     await expect(rankOneOutput).toContainText('env-1-2');
     await expect(rankOneOutput).toContainText('progress-1-2');
     await expect(rankOneOutput).toContainText('end-1');
+    await expect(rankOneOutput.locator('.jp-OutputArea-output')).toHaveCount(3);
+    const rankOneText = (await rankOneOutput.textContent()) ?? '';
+    expect(rankOneText.match(/Tensor parallel streaming works/g)).toHaveLength(
+      1
+    );
+    expect(rankOneText.match(/progress-1-2/g)).toHaveLength(1);
 
     const rankOnlyCell = await addCodeCell(
       page,
