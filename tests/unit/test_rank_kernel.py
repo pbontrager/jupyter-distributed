@@ -83,6 +83,19 @@ class ConcurrentControlReadSensitiveClient:
             self.active_reads -= 1
 
 
+class RecordingShellChannel:
+    def __init__(self) -> None:
+        self.messages: list[dict[str, Any]] = []
+
+    def send(self, message: dict[str, Any]) -> None:
+        self.messages.append(message)
+
+
+class CommClient:
+    def __init__(self) -> None:
+        self.shell_channel = RecordingShellChannel()
+
+
 @pytest.mark.asyncio
 async def test_shell_requests_are_serialized_per_rank() -> None:
     kernel = RankKernel(0, {"WORLD_SIZE": "1"})
@@ -113,3 +126,33 @@ async def test_debug_requests_are_serialized_per_rank() -> None:
 
     assert replies == [{"success": True}] * 3
     assert client.max_active_reads == 1
+
+
+def test_forwarded_comm_drops_proxy_subshell_id() -> None:
+    kernel = RankKernel(0, {"WORLD_SIZE": "2"})
+    client = CommClient()
+    kernel.client = cast(Any, client)
+    parent = {
+        "header": {
+            "msg_id": "frontend-comm",
+            "msg_type": "comm_msg",
+            "session": "frontend-session",
+            "subshell_id": "proxy-only-subshell",
+        },
+        "parent_header": {"msg_id": "parent"},
+    }
+
+    kernel.send_comm(
+        "comm_msg",
+        {"comm_id": "widget", "data": {"value": 1}},
+        parent=parent,
+    )
+
+    assert len(client.shell_channel.messages) == 1
+    forwarded = client.shell_channel.messages[0]
+    assert forwarded["header"] == {
+        "msg_id": "frontend-comm",
+        "msg_type": "comm_msg",
+        "session": "frontend-session",
+    }
+    assert parent["header"]["subshell_id"] == "proxy-only-subshell"

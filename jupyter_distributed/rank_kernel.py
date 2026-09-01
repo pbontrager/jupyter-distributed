@@ -218,6 +218,10 @@ class RankKernel:
         header = dict(source.get("header", {}))
         if not header:
             header = dict(client.session.msg(message_type)["header"])
+        # A subshell belongs to the kernel that created it. JupyterLab may send
+        # comms through a subshell in the proxy, but the independent child
+        # kernels do not have a corresponding subshell with that identifier.
+        header.pop("subshell_id", None)
         header["msg_type"] = message_type
         message = {
             "header": header,
