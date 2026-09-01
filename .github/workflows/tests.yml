@@ -30,3 +30,13 @@ jobs:
       - run: uv run jupyter labextension build .
       - run: yarn playwright install --with-deps chromium
       - run: yarn test:browser
+      - name: Upload browser test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-test-artifacts
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 14
