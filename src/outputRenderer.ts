@@ -481,10 +481,10 @@ namespace Private {
           model.appendStreamOutput(nextText.slice(currentText.length));
         } else {
           // Snapshot transport has already applied carriage returns and
-          // backspaces. Replace this output in place when its text was
-          // rewritten; removing and re-adding would leave OutputAreaModel's
-          // private stream cursor pointed at the preceding output.
-          model.set(index, next);
+          // backspaces. Mutate the existing stream model so JupyterLab keeps
+          // exactly one renderer and no private output-list cursor is changed.
+          model.removeStreamOutput(currentText.length);
+          model.appendStreamOutput(nextText);
         }
       } else {
         model.set(index, next);

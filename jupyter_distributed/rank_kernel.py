@@ -59,6 +59,7 @@ class RankKernel:
         self.manager = AsyncKernelManager(kernel_name=kernel_name)
         self.client: AsyncKernelClient | None = None
         self._shell_lock = asyncio.Lock()
+        self._control_lock = asyncio.Lock()
         self._iopub_queues: dict[str, asyncio.Queue[Mapping[str, Any]]] = {}
         self._iopub_task: asyncio.Task[None] | None = None
         self._monitor_task: asyncio.Task[None] | None = None
@@ -191,14 +192,15 @@ class RankKernel:
     async def debug_request(self, content: Mapping[str, Any]) -> Mapping[str, Any]:
         """Send one Jupyter debug request over the child control channel."""
 
-        client = self._client()
-        request = client.session.msg("debug_request", content=dict(content))
-        message_id = str(request["header"]["msg_id"])
-        client.control_channel.send(request)
-        while True:
-            reply = await self._wait_or_failure(client.get_control_msg(timeout=None))
-            if reply.get("parent_header", {}).get("msg_id") == message_id:
-                return reply.get("content", {})
+        async with self._control_lock:
+            client = self._client()
+            request = client.session.msg("debug_request", content=dict(content))
+            message_id = str(request["header"]["msg_id"])
+            client.control_channel.send(request)
+            while True:
+                reply = await self._wait_or_failure(client.get_control_msg(timeout=None))
+                if reply.get("parent_header", {}).get("msg_id") == message_id:
+                    return reply.get("content", {})
 
     def send_comm(
         self,

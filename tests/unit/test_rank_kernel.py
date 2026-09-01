@@ -40,6 +40,49 @@ class ConcurrentReadSensitiveClient:
             self.active_reads -= 1
 
 
+class FakeSession:
+    def __init__(self) -> None:
+        self.next_id = 0
+
+    def msg(self, message_type: str, content: dict[str, Any]) -> dict[str, Any]:
+        self.next_id += 1
+        return {
+            "header": {"msg_id": f"debug-{self.next_id}", "msg_type": message_type},
+            "content": content,
+        }
+
+
+class FakeControlChannel:
+    def __init__(self, pending: deque[str]) -> None:
+        self.pending = pending
+
+    def send(self, message: dict[str, Any]) -> None:
+        self.pending.append(message["header"]["msg_id"])
+
+
+class ConcurrentControlReadSensitiveClient:
+    def __init__(self) -> None:
+        self.pending: deque[str] = deque()
+        self.session = FakeSession()
+        self.control_channel = FakeControlChannel(self.pending)
+        self.active_reads = 0
+        self.max_active_reads = 0
+
+    async def get_control_msg(self, timeout: float | None = None) -> dict[str, Any]:
+        self.active_reads += 1
+        self.max_active_reads = max(self.max_active_reads, self.active_reads)
+        try:
+            if self.active_reads > 1:
+                raise Empty
+            await asyncio.sleep(0.01)
+            return {
+                "parent_header": {"msg_id": self.pending.popleft()},
+                "content": {"success": True},
+            }
+        finally:
+            self.active_reads -= 1
+
+
 @pytest.mark.asyncio
 async def test_shell_requests_are_serialized_per_rank() -> None:
     kernel = RankKernel(0, {"WORLD_SIZE": "1"})
@@ -53,4 +96,20 @@ async def test_shell_requests_are_serialized_per_rank() -> None:
     )
 
     assert replies == [{"implementation": "ipython"}] * 3
+    assert client.max_active_reads == 1
+
+
+@pytest.mark.asyncio
+async def test_debug_requests_are_serialized_per_rank() -> None:
+    kernel = RankKernel(0, {"WORLD_SIZE": "1"})
+    client = ConcurrentControlReadSensitiveClient()
+    kernel.client = cast(Any, client)
+
+    replies = await asyncio.gather(
+        kernel.debug_request({"command": "debugInfo"}),
+        kernel.debug_request({"command": "threads"}),
+        kernel.debug_request({"command": "stackTrace"}),
+    )
+
+    assert replies == [{"success": True}] * 3
     assert client.max_active_reads == 1
