@@ -119,6 +119,10 @@
   border-bottom-color: var(--jp-error-color1);
 }
 
+.jp-JupyterDistributedRankOutput-rank[aria-hidden='true'] {
+  display: none !important;
+}
+
 .jp-JupyterDistributedRankOutput-text {
   box-sizing: border-box;
   margin: 0;

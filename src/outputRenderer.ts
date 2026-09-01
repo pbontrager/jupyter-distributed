@@ -270,7 +270,9 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
       this._rankSelect.value = String(rank);
     }
     for (const [candidate, view] of this._rankViews) {
-      view.area.setHidden(candidate !== rank);
+      const selected = candidate === rank;
+      view.area.setHidden(!selected);
+      view.area.node.setAttribute('aria-hidden', String(!selected));
     }
   }
 
