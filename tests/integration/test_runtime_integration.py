@@ -154,7 +154,7 @@ def open_rank_update_comm(client: AsyncKernelClient) -> str:
     return comm_id
 
 
-def rank_update_snapshot(
+def rank_update(
     message: dict[str, Any],
     comm_id: str,
     parent_id: str | None = None,
@@ -167,8 +167,7 @@ def rank_update_snapshot(
     if parent_id is not None and message.get("parent_header", {}).get("msg_id") != parent_id:
         return None
     data = message["content"].get("data", {})
-    snapshot = data.get("snapshot") if data.get("method") == "update" else None
-    return snapshot if isinstance(snapshot, dict) else None
+    return data if data.get("method") == "update" else None
 
 
 async def debug_through_proxy(
@@ -542,15 +541,22 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
             "print()"
         )
         saw_live_output = False
-        final_snapshot = None
+        final_update = None
+        saw_incremental_patch = False
         output_messages = []
         while True:
             message = await client.get_iopub_msg(timeout=10)
-            snapshot = rank_update_snapshot(message, rank_update_comm_id, live_id)
-            if snapshot is not None:
-                final_snapshot = snapshot
-                if not snapshot["final"]:
-                    text = str(snapshot["data"][RANK_MIME]["ranks"][0]["outputs"])
+            update = rank_update(message, rank_update_comm_id)
+            if update is not None:
+                payload = update["payload"]
+                if update["kind"] == "snapshot":
+                    final_update = update
+                    text = str(payload["ranks"][0]["outputs"])
+                    saw_live_output = saw_live_output or "Tensor" in text
+                else:
+                    saw_incremental_patch = True
+                    assert "data" not in payload
+                    text = str(payload["rank_updates"])
                     saw_live_output = saw_live_output or "Tensor" in text
             if message.get("parent_header", {}).get("msg_id") != live_id:
                 continue
@@ -561,6 +567,7 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
         live_reply = await client.get_shell_msg(timeout=5)
         assert live_reply["content"]["status"] == "ok"
         assert saw_live_output
+        assert saw_incremental_patch
         assert [message["msg_type"] for message in output_messages] == [
             "display_data",
             "update_display_data",
@@ -569,8 +576,9 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
         assert len(set(display_ids)) == 1
         assert output_messages[0]["content"]["data"][RANK_MIME]["status"] == "busy"
         assert output_messages[-1]["content"]["data"][RANK_MIME]["status"] == "ok"
-        assert final_snapshot is not None
-        assert final_snapshot["final"] is True
+        assert final_update is not None
+        assert final_update["kind"] == "snapshot"
+        assert final_update["payload"]["status"] == "ok"
         assert len(output_messages[-1]["content"]["data"][RANK_MIME]["ranks"]) == 2
         final_outputs = output_messages[-1]["content"]["data"][RANK_MIME]["ranks"]
         assert [rank["outputs"][0]["content"]["text"] for rank in final_outputs] == [

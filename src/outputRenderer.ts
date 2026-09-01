@@ -9,8 +9,9 @@ import { Panel, TabBar, Widget } from '@lumino/widgets';
 import { RANK_MIME_TYPE } from './constants';
 import {
   executionId,
+  RankPatchUpdate,
+  RankUpdateChange,
   RankUpdateModel,
-  RankUpdateSnapshot
 } from './rankUpdates';
 
 export const MIME_TYPE = RANK_MIME_TYPE;
@@ -80,18 +81,47 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
     this._trusted = model.trusted;
     const payload = model.data[this._mimeType];
     this._executionId = executionId(payload);
-    const snapshot = this._updates.get(this._executionId);
-    await this._queueRender(
-      snapshot?.data[this._mimeType] ?? payload,
-      model.trusted
-    );
+    await this._queueRender(this._updates.seed(payload) ?? payload, model.trusted);
   }
 
   private async _queueRender(
     payload: unknown,
-    trusted: boolean
+    trusted: boolean,
+    changedRanks: number[] | null = null,
+    rankUpdates: RankPatchUpdate[] | null = null
   ): Promise<void> {
-    this._pendingRender = { payload, trusted };
+    const pendingRanks =
+      changedRanks === null ? null : new Set<number>(changedRanks);
+    const pendingPatches = Private.patchMap(rankUpdates);
+    if (this._pendingRender) {
+      this._pendingRender.payload = payload;
+      this._pendingRender.trusted = trusted;
+      if (
+        this._pendingRender.changedRanks !== null &&
+        pendingRanks !== null
+      ) {
+        for (const rank of pendingRanks) {
+          this._pendingRender.changedRanks.add(rank);
+        }
+      } else {
+        this._pendingRender.changedRanks = null;
+      }
+      if (
+        this._pendingRender.rankUpdates !== null &&
+        pendingPatches !== null
+      ) {
+        Private.mergePatchMaps(this._pendingRender.rankUpdates, pendingPatches);
+      } else {
+        this._pendingRender.rankUpdates = null;
+      }
+    } else {
+      this._pendingRender = {
+        payload,
+        trusted,
+        changedRanks: pendingRanks,
+        rankUpdates: pendingPatches
+      };
+    }
     if (this._rendering) {
       return;
     }
@@ -100,7 +130,12 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
       while (this._pendingRender !== null && !this.isDisposed) {
         const pending = this._pendingRender;
         this._pendingRender = null;
-        await this._renderPayload(pending.payload, pending.trusted);
+        await this._renderPayload(
+          pending.payload,
+          pending.trusted,
+          pending.changedRanks,
+          pending.rankUpdates
+        );
       }
     } finally {
       this._rendering = false;
@@ -109,7 +144,9 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
 
   private async _renderPayload(
     payload: unknown,
-    trusted: boolean
+    trusted: boolean,
+    changedRanks: Set<number> | null,
+    rankUpdates: Map<number, Record<string, unknown>[]> | null
   ): Promise<void> {
     const normalizedRanks = Private.normalizePayload(payload);
     const targetRank = Private.targetRank(payload);
@@ -157,14 +194,23 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
       for (const rank of ranks) {
         this._createRankView(rank.rank, trusted);
       }
+      changedRanks = null;
+      rankUpdates = null;
     }
 
-    for (const rank of ranks) {
+    const updatedRanks =
+      changedRanks === null
+        ? ranks
+        : ranks.filter(rank => changedRanks.has(rank.rank));
+    for (const rank of updatedRanks) {
       this._updateRankStatus(rank);
       const view = this._rankViews.get(rank.rank);
       if (view) {
         view.model.trusted = trusted;
-        Private.syncOutputs(view.model, rank.outputs);
+        const patches = rankUpdates?.get(rank.rank);
+        if (!patches || !Private.applyOutputPatches(view.model, patches)) {
+          Private.syncOutputs(view.model, rank.outputs);
+        }
       }
     }
 
@@ -297,14 +343,16 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
 
   private _onRankUpdate(
     sender: RankUpdateModel,
-    change: { executionId: string; snapshot: RankUpdateSnapshot }
+    change: RankUpdateChange
   ): void {
     if (change.executionId !== this._executionId) {
       return;
     }
     void this._queueRender(
-      change.snapshot.data[this._mimeType],
-      this._trusted
+      change.payload,
+      this._trusted,
+      change.changedRanks,
+      change.rankUpdates
     );
   }
 
@@ -338,7 +386,12 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
   private _executionId: string | null = null;
   private _layoutKey: string | null = null;
   private _mimeType: string;
-  private _pendingRender: { payload: unknown; trusted: boolean } | null = null;
+  private _pendingRender: {
+    payload: unknown;
+    trusted: boolean;
+    changedRanks: Set<number> | null;
+    rankUpdates: Map<number, Record<string, unknown>[]> | null;
+  } | null = null;
   private _rankSelect: HTMLSelectElement | null = null;
   private _rankViews = new Map<number, RankView>();
   private _ranks: number[] = [];
@@ -353,6 +406,31 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
 }
 
 namespace Private {
+  export function patchMap(
+    updates: RankPatchUpdate[] | null
+  ): Map<number, Record<string, unknown>[]> | null {
+    if (updates === null) {
+      return null;
+    }
+    return new Map(
+      updates.map(update => [update.rank, [...update.patches]])
+    );
+  }
+
+  export function mergePatchMaps(
+    target: Map<number, Record<string, unknown>[]>,
+    source: Map<number, Record<string, unknown>[]>
+  ): void {
+    for (const [rank, patches] of source) {
+      const existing = target.get(rank);
+      if (existing) {
+        existing.push(...patches);
+      } else {
+        target.set(rank, [...patches]);
+      }
+    }
+  }
+
   export function targetRank(value: unknown): number | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
       return null;
@@ -518,6 +596,64 @@ namespace Private {
     for (let index = model.length; index < outputs.length; index++) {
       model.add(outputs[index]);
     }
+  }
+
+  export function applyOutputPatches(
+    model: OutputAreaModel,
+    patches: Record<string, unknown>[]
+  ): boolean {
+    for (const patch of patches) {
+      if (patch.kind === 'append_output') {
+        const output = normalizeOutput(patch.output);
+        if (!output) {
+          return false;
+        }
+        model.add(output);
+        continue;
+      }
+      const index = Number(patch.index);
+      if (patch.kind === 'append_stream') {
+        if (
+          !Number.isSafeInteger(index) ||
+          index !== model.length - 1 ||
+          typeof patch.text !== 'string' ||
+          model.get(index).type !== 'stream'
+        ) {
+          return false;
+        }
+        model.appendStreamOutput(patch.text);
+        continue;
+      }
+      if (patch.kind === 'replace_output') {
+        const output = normalizeOutput(patch.output);
+        if (
+          !Number.isSafeInteger(index) ||
+          index < 0 ||
+          index >= model.length ||
+          !output
+        ) {
+          return false;
+        }
+        model.set(index, output);
+        continue;
+      }
+      if (patch.kind === 'truncate') {
+        const length = Number(patch.length);
+        if (
+          !Number.isSafeInteger(length) ||
+          length < 0 ||
+          length > model.length
+        ) {
+          return false;
+        }
+        while (model.length > length) {
+          model.remove(model.length - 1);
+        }
+        continue;
+      }
+      return false;
+    }
+    return true;
   }
 
   export function textWidget(text: string, className: string): Widget {

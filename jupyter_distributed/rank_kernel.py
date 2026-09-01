@@ -10,10 +10,13 @@ from typing import Any
 from jupyter_client import AsyncKernelManager
 from jupyter_client.asynchronous.client import AsyncKernelClient
 
-from .protocol import RankExecution, RankOutput
+from .protocol import RankExecution, RankOutput, RankOutputPatch
 
 _OUTPUT_TYPES = {"stream", "display_data", "execute_result", "error"}
-OutputCallback = Callable[[int, tuple[RankOutput, ...]], Awaitable[None] | None]
+OutputCallback = Callable[
+    [int, tuple[RankOutput, ...], tuple[RankOutputPatch, ...]],
+    Awaitable[None] | None,
+]
 DebugEventCallback = Callable[[int, Mapping[str, Any]], Awaitable[None] | None]
 CommEventCallback = Callable[[int, Mapping[str, Any]], Awaitable[None] | None]
 FailureCallback = Callable[[int, BaseException], Awaitable[None] | None]
@@ -154,7 +157,11 @@ class RankKernel:
                     changed = output_buffer.handle(str(message_type), content)
                     self._sync_display_buffers(output_buffer, on_output)
                 if changed and on_output is not None:
-                    notified = on_output(self.rank, output_buffer.snapshot())
+                    notified = on_output(
+                        self.rank,
+                        output_buffer.snapshot(),
+                        output_buffer.take_patches(),
+                    )
                     if inspect.isawaitable(notified):
                         await notified
                 if (
@@ -363,7 +370,7 @@ class RankKernel:
         for buffer, callback in tuple(self._display_buffers.get(display_id, {}).items()):
             if not buffer.update_display(content) or callback is None:
                 continue
-            notified = callback(self.rank, buffer.snapshot())
+            notified = callback(self.rank, buffer.snapshot(), buffer.take_patches())
             if inspect.isawaitable(notified):
                 await notified
 
@@ -375,11 +382,17 @@ class _RankOutputBuffer:
         self.rank = rank
         self._outputs: list[RankOutput] = []
         self._display_ids: dict[str, list[int]] = {}
+        self._patches: list[RankOutputPatch] = []
         self._clear_next = False
         self._stream_index = 0
 
     def snapshot(self) -> tuple[RankOutput, ...]:
         return tuple(self._outputs)
+
+    def take_patches(self) -> tuple[RankOutputPatch, ...]:
+        patches = tuple(self._patches)
+        self._patches.clear()
+        return patches
 
     @property
     def display_ids(self) -> tuple[str, ...]:
@@ -390,7 +403,7 @@ class _RankOutputBuffer:
             if bool(content.get("wait", False)):
                 self._clear_next = True
             else:
-                self._clear()
+                self._clear(record_patch=True)
             return not self._clear_next
 
         if message_type == "update_display_data":
@@ -400,7 +413,7 @@ class _RankOutputBuffer:
             return False
 
         if self._clear_next:
-            self._clear()
+            self._clear(record_patch=True)
         self._append(message_type, content)
         return True
 
@@ -415,14 +428,35 @@ class _RankOutputBuffer:
             ):
                 previous = self._outputs[-1]
                 previous_text = _as_text(previous.content.get("text", ""))
+                append_only = self._stream_index == len(previous_text) and not {
+                    "\r",
+                    "\b",
+                }.intersection(text)
                 text, self._stream_index = _process_stream_text(
                     self._stream_index, text, previous_text
                 )
-                self._outputs[-1] = RankOutput(
+                output = RankOutput(
                     rank=self.rank,
                     kind="stream",
                     content={**previous.content, "text": text},
                 )
+                self._outputs[-1] = output
+                if append_only:
+                    self._patches.append(
+                        RankOutputPatch(
+                            "append_stream",
+                            index=len(self._outputs) - 1,
+                            text=_as_text(content.get("text", "")),
+                        )
+                    )
+                else:
+                    self._patches.append(
+                        RankOutputPatch(
+                            "replace_output",
+                            index=len(self._outputs) - 1,
+                            output=output,
+                        )
+                    )
                 return
             text, self._stream_index = _process_stream_text(0, text)
             content = {**content, "name": name, "text": text}
@@ -435,6 +469,7 @@ class _RankOutputBuffer:
             content=dict(content),
         )
         self._outputs.append(output)
+        self._patches.append(RankOutputPatch("append_output", output=output))
         if message_type in {"display_data", "execute_result"}:
             display_id = _display_id(content)
             if display_id is not None:
@@ -446,18 +481,22 @@ class _RankOutputBuffer:
             return False
         indices = self._display_ids.get(display_id, [])
         for index in indices:
-            self._outputs[index] = RankOutput(
+            output = RankOutput(
                 rank=self.rank,
                 kind="display_data",
                 content=dict(content),
             )
+            self._outputs[index] = output
+            self._patches.append(RankOutputPatch("replace_output", index=index, output=output))
         return bool(indices)
 
-    def _clear(self) -> None:
+    def _clear(self, *, record_patch: bool = False) -> None:
         self._outputs.clear()
         self._display_ids.clear()
         self._clear_next = False
         self._stream_index = 0
+        if record_patch:
+            self._patches.append(RankOutputPatch("truncate", length=0))
 
 
 def _display_id(content: Mapping[str, Any]) -> str | None:

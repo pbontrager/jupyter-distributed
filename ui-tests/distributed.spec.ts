@@ -1,7 +1,8 @@
 import {
   expect,
   test,
-  type IJupyterLabPageFixture
+  type IJupyterLabPageFixture,
+  type JupyterLabPage
 } from '@jupyterlab/galata';
 import type { Locator } from '@playwright/test';
 
@@ -318,12 +319,9 @@ test.describe('distributed notebook rendering', () => {
     ).toBeEnabled({ timeout: 30000 });
     expect(await page.notebook.save()).toBe(true);
 
-    const directory = await page.filebrowser.getCurrentDirectory();
-    const directoryParts = directory.split('/').filter(Boolean);
-    const notebookPath = [...directoryParts, 'distributed.ipynb'].join('/');
-    const directoryPath = directoryParts.map(encodeURIComponent).join('/');
-    await page.goto(`tree/${directoryPath}?reset`);
-    expect(await page.notebook.openByPath(notebookPath)).toBe(true);
+    await (page as unknown as JupyterLabPage).reload({
+      waitForIsReady: false
+    });
     await expect(
       page
         .getByRole('main')

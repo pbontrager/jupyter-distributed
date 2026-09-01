@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import html
 import os
 import signal
@@ -20,7 +21,7 @@ from .comms import DistributedCommRouter
 from .debugger import DistributedDebugger
 from .kernel_group import DistributedKernelGroup
 from .process_registry import ChildProcessRegistry
-from .protocol import GroupExecution, RankExecution, RankOutput
+from .protocol import GroupExecution, RankExecution, RankOutput, RankOutputPatch
 from .rank_magic import RankMagicError, parse_rank_cell
 
 RANK_MIME = "application/vnd.jupyter-distributed.rank+json"
@@ -76,21 +77,25 @@ class _LiveRankDisplay:
         self._outputs: dict[int, tuple[RankOutput, ...]] = {
             rank: () for rank in range(kernel.group.world_size)
         }
+        self._pending_patches: dict[int, list[RankOutputPatch]] = {}
         self._flush_task: asyncio.Task[None] | None = None
         self._last_sent = 0.0
-        self._dirty = False
         self._started = False
         self._execution: GroupExecution | None = None
 
-    def update(self, rank: int, outputs: tuple[RankOutput, ...]) -> None:
+    def update(
+        self,
+        rank: int,
+        outputs: tuple[RankOutput, ...],
+        patches: tuple[RankOutputPatch, ...],
+    ) -> None:
         self._outputs[rank] = outputs
-        self._dirty = True
         if self._execution is not None:
             execution = self._updated_execution()
             payload = execution.as_dict()
             if self._target_rank is not None:
                 payload["target_rank"] = self._target_rank
-            self._kernel.live_updates.publish(self._snapshot(payload, execution=execution))
+            self._kernel.live_updates.publish_snapshot(payload)
             self._send_display(
                 "update_display_data",
                 self._data(payload, execution=execution),
@@ -102,8 +107,11 @@ class _LiveRankDisplay:
             self._started = True
             payload = self._live_payload()
             self._send_display("display_data", self._data(payload))
-            self._kernel.live_updates.publish(self._snapshot(payload))
+            self._kernel.live_updates.publish_snapshot(payload)
             return
+        pending = self._pending_patches.setdefault(rank, [])
+        for patch in patches:
+            _append_output_patch(pending, patch)
         if self._flush_task is not None:
             return
         loop = asyncio.get_running_loop()
@@ -124,12 +132,13 @@ class _LiveRankDisplay:
         if self._target_rank is not None:
             payload["target_rank"] = self._target_rank
         if self._started:
-            self._kernel.live_updates.publish(self._snapshot(payload, execution=execution))
+            self._kernel.live_updates.publish_snapshot(payload)
             self._send_display("update_display_data", self._data(payload, execution=execution))
         else:
             self._started = True
             self._send_display("display_data", self._data(payload, execution=execution))
-            self._kernel.live_updates.publish(self._snapshot(payload, execution=execution))
+            self._kernel.live_updates.publish_snapshot(payload)
+        self._pending_patches.clear()
 
     def _updated_execution(self) -> GroupExecution:
         assert self._execution is not None
@@ -151,11 +160,12 @@ class _LiveRankDisplay:
         if delay:
             await asyncio.sleep(delay)
         self._flush_task = None
-        if self._dirty:
-            payload = self._live_payload()
-            self._kernel.live_updates.publish(self._snapshot(payload))
+        if self._pending_patches:
+            payload = self._patch_payload()
+            if not self._kernel.live_updates.publish_patch(payload):
+                self._kernel.live_updates.publish_snapshot(self._live_payload())
             self._last_sent = asyncio.get_running_loop().time()
-            self._dirty = False
+            self._pending_patches.clear()
 
     def _live_payload(self) -> dict[str, Any]:
         payload = {
@@ -167,27 +177,32 @@ class _LiveRankDisplay:
                 {
                     "rank": rank,
                     "status": "running",
-                    "outputs": [output.as_dict() for output in outputs],
+                    "outputs": [output.as_dict() for output in self._outputs[rank]],
                 }
-                for rank, outputs in sorted(self._outputs.items())
+                for rank in sorted(self._outputs)
             ],
         }
         if self._target_rank is not None:
             payload["target_rank"] = self._target_rank
         return payload
 
-    def _snapshot(
-        self,
-        payload: dict[str, Any],
-        *,
-        execution: GroupExecution | None = None,
-    ) -> dict[str, Any]:
-        return {
+    def _patch_payload(self) -> dict[str, Any]:
+        payload = {
             "execution_id": self._execution_id,
-            "final": execution is not None,
-            "data": self._data(payload, execution=execution),
-            "metadata": {},
+            "execution_count": self._execution_count,
+            "status": "busy",
+            "world_size": len(self._outputs),
+            "rank_updates": [
+                {
+                    "rank": rank,
+                    "patches": [patch.as_dict() for patch in patches],
+                }
+                for rank, patches in sorted(self._pending_patches.items())
+            ],
         }
+        if self._target_rank is not None:
+            payload["target_rank"] = self._target_rank
+        return payload
 
     def _data(
         self,
@@ -218,16 +233,16 @@ class _LiveRankDisplay:
             },
         )
         self._last_sent = asyncio.get_running_loop().time()
-        self._dirty = False
 
 
 class _LiveRankUpdates:
-    """Broadcast the latest transient rank snapshot to connected frontends."""
+    """Broadcast rate-limited patches with snapshot recovery."""
 
     def __init__(self, kernel: SPMDKernel) -> None:
         self._kernel = kernel
         self._subscribers: set[str] = set()
         self._latest: dict[str, Any] | None = None
+        self._sequence = 0
 
     def handle_frontend(self, message_type: str, message: Mapping[str, Any]) -> bool:
         content = message.get("content", {})
@@ -241,13 +256,7 @@ class _LiveRankUpdates:
             if content.get("target_name") != RANK_UPDATE_COMM_TARGET:
                 return False
             self._subscribers.add(comm_id)
-            self._send(
-                comm_id,
-                {
-                    "method": "snapshots",
-                    "snapshots": [self._latest] if self._latest is not None else [],
-                },
-            )
+            self._send_snapshot(comm_id)
             return True
 
         if comm_id not in self._subscribers:
@@ -256,20 +265,28 @@ class _LiveRankUpdates:
             self._subscribers.discard(comm_id)
         elif message_type == "comm_msg":
             data = content.get("data", {})
-            if isinstance(data, Mapping) and data.get("method") == "request_snapshots":
-                self._send(
-                    comm_id,
-                    {
-                        "method": "snapshots",
-                        "snapshots": [self._latest] if self._latest is not None else [],
-                    },
-                )
+            if isinstance(data, Mapping):
+                if data.get("method") == "request_snapshots":
+                    self._send_snapshot(comm_id)
         return True
 
-    def publish(self, snapshot: dict[str, Any]) -> None:
-        self._latest = snapshot
+    def publish_patch(self, payload: dict[str, Any]) -> bool:
+        latest = self._apply_patch(self._latest, payload)
+        if latest is None:
+            return False
+        self._latest = latest
+        self._publish("patch", payload)
+        return True
+
+    def publish_snapshot(self, payload: dict[str, Any]) -> None:
+        self._latest = copy.deepcopy(payload)
+        self._publish("snapshot", payload)
+
+    def _publish(self, kind: str, payload: dict[str, Any]) -> None:
+        self._sequence += 1
+        update = {"sequence": self._sequence, "kind": kind, "payload": payload}
         for comm_id in tuple(self._subscribers):
-            self._send(comm_id, {"method": "update", "snapshot": snapshot})
+            self._send(comm_id, {"method": "update", **update})
 
     def comm_info(self) -> dict[str, dict[str, str]]:
         return {comm_id: {"target_name": RANK_UPDATE_COMM_TARGET} for comm_id in self._subscribers}
@@ -277,6 +294,43 @@ class _LiveRankUpdates:
     def reset(self) -> None:
         self._subscribers.clear()
         self._latest = None
+        self._sequence = 0
+
+    def _send_snapshot(self, comm_id: str) -> None:
+        snapshots = []
+        if self._latest is not None:
+            snapshots.append({"sequence": self._sequence, "payload": copy.deepcopy(self._latest)})
+        self._send(comm_id, {"method": "snapshots", "snapshots": snapshots})
+
+    @staticmethod
+    def _apply_patch(
+        previous: Mapping[str, Any] | None,
+        current: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        if previous is None or previous.get("execution_id") != current.get("execution_id"):
+            return None
+        merged = dict(previous)
+        merged.update({key: value for key, value in current.items() if key != "rank_updates"})
+        ranks = {
+            int(rank["rank"]): {**rank, "outputs": list(rank.get("outputs", ()))}
+            for rank in previous.get("ranks", ())
+            if isinstance(rank, Mapping) and isinstance(rank.get("rank"), int)
+        }
+        for update in current.get("rank_updates", ()):
+            if not isinstance(update, Mapping) or not isinstance(update.get("rank"), int):
+                return None
+            rank_number = int(update["rank"])
+            rank = ranks.get(
+                rank_number,
+                {"rank": rank_number, "status": "running", "outputs": []},
+            )
+            outputs = list(rank.get("outputs", ()))
+            for patch in update.get("patches", ()):
+                if not isinstance(patch, Mapping) or not _apply_output_patch(outputs, patch):
+                    return None
+            ranks[rank_number] = {**rank, "outputs": outputs}
+        merged["ranks"] = [ranks[rank] for rank in sorted(ranks)]
+        return merged
 
     def _send(self, comm_id: str, data: dict[str, Any]) -> None:
         self._kernel.send_response(
@@ -284,6 +338,81 @@ class _LiveRankUpdates:
             "comm_msg",
             {"comm_id": comm_id, "data": data},
         )
+
+
+def _apply_output_patch(outputs: list[Any], patch: Mapping[str, Any]) -> bool:
+    kind = patch.get("kind")
+    if kind == "append_output":
+        output = patch.get("output")
+        if not isinstance(output, Mapping):
+            return False
+        outputs.append(dict(output))
+        return True
+    if kind == "append_stream":
+        index = patch.get("index")
+        text = patch.get("text")
+        if not isinstance(index, int) or not isinstance(text, str) or not 0 <= index < len(outputs):
+            return False
+        output = outputs[index]
+        if not isinstance(output, Mapping) or output.get("type") != "stream":
+            return False
+        content = output.get("content")
+        if not isinstance(content, Mapping):
+            return False
+        previous_text = content.get("text", "")
+        if isinstance(previous_text, list):
+            previous_text.append(text)
+            next_text = previous_text
+        else:
+            next_text = [previous_text, text]
+        outputs[index] = {**output, "content": {**content, "text": next_text}}
+        return True
+    if kind == "replace_output":
+        index = patch.get("index")
+        output = patch.get("output")
+        if (
+            not isinstance(index, int)
+            or not 0 <= index < len(outputs)
+            or not isinstance(output, Mapping)
+        ):
+            return False
+        outputs[index] = dict(output)
+        return True
+    if kind == "truncate":
+        length = patch.get("length")
+        if not isinstance(length, int) or not 0 <= length <= len(outputs):
+            return False
+        del outputs[length:]
+        return True
+    return False
+
+
+def _append_output_patch(
+    pending: list[RankOutputPatch],
+    patch: RankOutputPatch,
+) -> None:
+    """Coalesce adjacent stream mutations within one publish interval."""
+
+    previous = pending[-1] if pending else None
+    if (
+        previous is not None
+        and previous.kind == patch.kind == "append_stream"
+        and previous.index == patch.index
+    ):
+        pending[-1] = RankOutputPatch(
+            "append_stream",
+            index=patch.index,
+            text=f"{previous.text or ''}{patch.text or ''}",
+        )
+        return
+    if (
+        previous is not None
+        and previous.kind == patch.kind == "replace_output"
+        and previous.index == patch.index
+    ):
+        pending[-1] = patch
+        return
+    pending.append(patch)
 
 
 class SPMDKernel(Kernel):

@@ -9,6 +9,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 OutputKind = Literal["stream", "display_data", "execute_result", "error"]
+OutputPatchKind = Literal["append_output", "append_stream", "replace_output", "truncate"]
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
@@ -43,6 +44,29 @@ class RankOutput:
         if isinstance(traceback, list):
             return "\n".join(strip_ansi(line) for line in traceback)
         return f"{self.content.get('ename', 'Error')}: {self.content.get('evalue', '')}"
+
+
+@dataclass(frozen=True, slots=True)
+class RankOutputPatch:
+    """One incremental mutation of a rank's output list."""
+
+    kind: OutputPatchKind
+    index: int | None = None
+    output: RankOutput | None = None
+    text: str | None = None
+    length: int | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        patch: dict[str, Any] = {"kind": self.kind}
+        if self.index is not None:
+            patch["index"] = self.index
+        if self.output is not None:
+            patch["output"] = self.output.as_dict()
+        if self.text is not None:
+            patch["text"] = self.text
+        if self.length is not None:
+            patch["length"] = self.length
+        return patch
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,49 +1,119 @@
 import { NotebookPanel } from '@jupyterlab/notebook';
-import { IRenderMime } from '@jupyterlab/rendermime-interfaces';
 import { Kernel, KernelMessage } from '@jupyterlab/services';
+import { JSONObject } from '@lumino/coreutils';
 import { IDisposable } from '@lumino/disposable';
 import { Signal } from '@lumino/signaling';
 
 import { RANK_UPDATE_COMM_TARGET } from './constants';
 
-export interface RankUpdateSnapshot {
-  execution_id: string;
-  final: boolean;
-  data: IRenderMime.IMimeModel['data'];
-  metadata: IRenderMime.IMimeModel['metadata'];
+export interface RankUpdateChange {
+  executionId: string;
+  payload: Record<string, unknown>;
+  changedRanks: number[];
+  rankUpdates: RankPatchUpdate[] | null;
 }
 
-/** Stores transient snapshots independently of the notebook document model. */
-export class RankUpdateModel {
-  readonly changed = new Signal<
-    this,
-    { executionId: string; snapshot: RankUpdateSnapshot }
-  >(this);
+export interface RankPatchUpdate {
+  rank: number;
+  patches: Record<string, unknown>[];
+}
 
-  get(executionId: string | null): RankUpdateSnapshot | undefined {
-    return executionId ? this._snapshots.get(executionId) : undefined;
+interface ExecutionState {
+  sequence: number;
+  payload: Record<string, unknown>;
+}
+
+interface ApplyResult {
+  needsSnapshot: boolean;
+}
+
+/** Reduces ordered rank patches into recoverable execution snapshots. */
+export class RankUpdateModel {
+  readonly changed = new Signal<this, RankUpdateChange>(this);
+
+  seed(value: unknown): Record<string, unknown> | null {
+    const payload = Private.normalizePayload(value);
+    if (!payload) {
+      return null;
+    }
+    const id = executionId(payload)!;
+    const existing = this._executions.get(id);
+    if (!existing || payload.status !== 'busy') {
+      this._store(id, { sequence: existing?.sequence ?? 0, payload });
+      return payload;
+    }
+    return existing.payload;
   }
 
-  update(value: unknown): void {
-    const snapshot = Private.normalizeSnapshot(value);
-    if (!snapshot) {
-      return;
+  apply(sequence: number, kind: unknown, value: unknown): ApplyResult {
+    if (!Number.isSafeInteger(sequence) || sequence < 0) {
+      return { needsSnapshot: true };
     }
-    this._snapshots.set(snapshot.execution_id, snapshot);
-    while (this._snapshots.size > 16) {
-      const oldest = this._snapshots.keys().next().value;
+    if (kind === 'snapshot') {
+      const payload = Private.normalizePayload(value);
+      if (!payload) {
+        return { needsSnapshot: true };
+      }
+      const id = executionId(payload)!;
+      const existing = this._executions.get(id);
+      if (existing && sequence <= existing.sequence) {
+        return { needsSnapshot: false };
+      }
+      this._store(id, { sequence, payload });
+      this.changed.emit({
+        executionId: id,
+        payload,
+        changedRanks: Private.rankNumbers(payload),
+        rankUpdates: null
+      });
+      return { needsSnapshot: false };
+    }
+    if (kind !== 'patch') {
+      return { needsSnapshot: true };
+    }
+
+    const patch = Private.normalizePatch(value);
+    if (!patch) {
+      return { needsSnapshot: true };
+    }
+    const id = executionId(patch)!;
+    const existing = this._executions.get(id);
+    if (existing && sequence <= existing.sequence) {
+      return { needsSnapshot: false };
+    }
+    if (!existing || sequence !== existing.sequence + 1) {
+      return { needsSnapshot: true };
+    }
+    const applied = Private.applyPatch(existing.payload, patch);
+    if (!applied) {
+      return { needsSnapshot: true };
+    }
+    this._store(id, { sequence, payload: applied.payload });
+    this.changed.emit({
+      executionId: id,
+      payload: applied.payload,
+      changedRanks: applied.changedRanks,
+      rankUpdates: applied.rankUpdates
+    });
+    return { needsSnapshot: false };
+  }
+
+  private _store(executionId: string, state: ExecutionState): void {
+    this._executions.delete(executionId);
+    this._executions.set(executionId, state);
+    while (this._executions.size > 16) {
+      const oldest = this._executions.keys().next().value;
       if (oldest === undefined) {
         break;
       }
-      this._snapshots.delete(oldest);
+      this._executions.delete(oldest);
     }
-    this.changed.emit({ executionId: snapshot.execution_id, snapshot });
   }
 
-  private _snapshots = new Map<string, RankUpdateSnapshot>();
+  private _executions = new Map<string, ExecutionState>();
 }
 
-/** Owns the transient rank-update comm for one notebook connection. */
+/** Owns the sequenced rank-update comm for one notebook connection. */
 export class RankUpdateComm implements IDisposable {
   constructor(panel: NotebookPanel, updates: RankUpdateModel) {
     this._panel = panel;
@@ -144,7 +214,7 @@ export class RankUpdateComm implements IDisposable {
       };
     });
     comm.onMsg = message => {
-      this._onMessage(message);
+      this._onMessage(comm, message);
       const data = message.content.data as Record<string, unknown>;
       if (data.method === 'snapshots') {
         settle(true);
@@ -201,6 +271,17 @@ export class RankUpdateComm implements IDisposable {
     }
   }
 
+  private _send(comm: Kernel.IComm, data: JSONObject): void {
+    if (comm.isDisposed) {
+      return;
+    }
+    try {
+      void comm.send(data).done.catch(() => undefined);
+    } catch {
+      // Reconnection will recover from the kernel's latest snapshot.
+    }
+  }
+
   private _scheduleReconnect(): void {
     if (
       !this._enabled ||
@@ -233,18 +314,32 @@ export class RankUpdateComm implements IDisposable {
     }
   };
 
-  private _onMessage = (message: KernelMessage.ICommMsgMsg): void => {
+  private _onMessage(
+    comm: Kernel.IComm,
+    message: KernelMessage.ICommMsgMsg
+  ): void {
     const data = message.content.data as Record<string, unknown>;
     if (data.method === 'update') {
-      this._updates.update(data.snapshot);
+      const sequence = Number(data.sequence);
+      const result = this._updates.apply(sequence, data.kind, data.payload);
+      if (result.needsSnapshot) {
+        this._send(comm, { method: 'request_snapshots' });
+      }
       return;
     }
     if (data.method === 'snapshots' && Array.isArray(data.snapshots)) {
       for (const snapshot of data.snapshots) {
-        this._updates.update(snapshot);
+        if (!Private.isRecord(snapshot)) {
+          continue;
+        }
+        this._updates.apply(
+          Number(snapshot.sequence),
+          'snapshot',
+          snapshot.payload
+        );
       }
     }
-  };
+  }
 
   private _comm: Kernel.IComm | null = null;
   private _connecting: Promise<boolean> | null = null;
@@ -258,44 +353,185 @@ export class RankUpdateComm implements IDisposable {
 }
 
 export function executionId(value: unknown): string | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+  if (!Private.isRecord(value)) {
     return null;
   }
-  const id = (value as Record<string, unknown>).execution_id;
+  const id = value.execution_id;
   return typeof id === 'string' && id ? id : null;
 }
 
 namespace Private {
+  interface AppliedPatch {
+    payload: Record<string, unknown>;
+    changedRanks: number[];
+    rankUpdates: RankPatchUpdate[];
+  }
+
   export function delay(milliseconds: number): Promise<void> {
     return new Promise(resolve => window.setTimeout(resolve, milliseconds));
   }
 
-  export function normalizeSnapshot(value: unknown): RankUpdateSnapshot | null {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+  export function isRecord(value: unknown): value is Record<string, unknown> {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  export function normalizePayload(
+    value: unknown
+  ): Record<string, unknown> | null {
+    if (!isRecord(value) || !executionId(value) || !Array.isArray(value.ranks)) {
       return null;
     }
-    const candidate = value as Record<string, unknown>;
+    return { ...value, ranks: value.ranks.map(rank => cloneRecord(rank)) };
+  }
+
+  export function normalizePatch(
+    value: unknown
+  ): Record<string, unknown> | null {
     if (
-      typeof candidate.execution_id !== 'string' ||
-      !candidate.execution_id ||
-      typeof candidate.final !== 'boolean' ||
-      !candidate.data ||
-      typeof candidate.data !== 'object' ||
-      Array.isArray(candidate.data)
+      !isRecord(value) ||
+      !executionId(value) ||
+      !Array.isArray(value.rank_updates)
     ) {
       return null;
     }
-    const metadata =
-      candidate.metadata &&
-      typeof candidate.metadata === 'object' &&
-      !Array.isArray(candidate.metadata)
-        ? candidate.metadata
-        : {};
-    return {
-      execution_id: candidate.execution_id,
-      final: candidate.final,
-      data: candidate.data as IRenderMime.IMimeModel['data'],
-      metadata: metadata as IRenderMime.IMimeModel['metadata']
+    return value;
+  }
+
+  export function rankNumbers(payload: Record<string, unknown>): number[] {
+    return Array.isArray(payload.ranks)
+      ? payload.ranks
+          .map(rank => (isRecord(rank) ? Number(rank.rank) : NaN))
+          .filter(rank => Number.isSafeInteger(rank) && rank >= 0)
+      : [];
+  }
+
+  export function applyPatch(
+    previous: Record<string, unknown>,
+    patch: Record<string, unknown>
+  ): AppliedPatch | null {
+    if (executionId(previous) !== executionId(patch)) {
+      return null;
+    }
+    const ranks = new Map<number, Record<string, unknown>>();
+    if (!Array.isArray(previous.ranks)) {
+      return null;
+    }
+    for (const value of previous.ranks) {
+      if (!isRecord(value) || !Number.isSafeInteger(Number(value.rank))) {
+        return null;
+      }
+      ranks.set(Number(value.rank), cloneRank(value));
+    }
+
+    const changedRanks: number[] = [];
+    const rankUpdates: RankPatchUpdate[] = [];
+    for (const value of patch.rank_updates as unknown[]) {
+      if (!isRecord(value) || !Number.isSafeInteger(Number(value.rank))) {
+        return null;
+      }
+      const rankNumber = Number(value.rank);
+      const rank = ranks.get(rankNumber);
+      if (!rank || !Array.isArray(rank.outputs) || !Array.isArray(value.patches)) {
+        return null;
+      }
+      const outputs = [...rank.outputs];
+      for (const operation of value.patches) {
+        if (!isRecord(operation) || !applyOutputPatch(outputs, operation)) {
+          return null;
+        }
+      }
+      ranks.set(rankNumber, { ...rank, outputs });
+      changedRanks.push(rankNumber);
+      rankUpdates.push({
+        rank: rankNumber,
+        patches: value.patches.filter(isRecord)
+      });
+    }
+
+    const payload = {
+      ...previous,
+      ...Object.fromEntries(
+        Object.entries(patch).filter(([key]) => key !== 'rank_updates')
+      ),
+      ranks: [...ranks.values()].sort(
+        (left, right) => Number(left.rank) - Number(right.rank)
+      )
     };
+    return { payload, changedRanks, rankUpdates };
+  }
+
+  function applyOutputPatch(
+    outputs: unknown[],
+    patch: Record<string, unknown>
+  ): boolean {
+    if (patch.kind === 'append_output' && isRecord(patch.output)) {
+      outputs.push(cloneRecord(patch.output));
+      return true;
+    }
+    const index = Number(patch.index);
+    if (patch.kind === 'append_stream') {
+      if (
+        !Number.isSafeInteger(index) ||
+        index < 0 ||
+        index >= outputs.length ||
+        typeof patch.text !== 'string'
+      ) {
+        return false;
+      }
+      const output = outputs[index];
+      if (!isRecord(output) || output.type !== 'stream' || !isRecord(output.content)) {
+        return false;
+      }
+      const previousText = output.content.text;
+      const nextText = Array.isArray(previousText)
+        ? previousText
+        : [asText(previousText)];
+      nextText.push(patch.text);
+      outputs[index] = {
+        ...output,
+        content: { ...output.content, text: nextText }
+      };
+      return true;
+    }
+    if (patch.kind === 'replace_output') {
+      if (
+        !Number.isSafeInteger(index) ||
+        index < 0 ||
+        index >= outputs.length ||
+        !isRecord(patch.output)
+      ) {
+        return false;
+      }
+      outputs[index] = cloneRecord(patch.output);
+      return true;
+    }
+    if (patch.kind === 'truncate') {
+      const length = Number(patch.length);
+      if (!Number.isSafeInteger(length) || length < 0 || length > outputs.length) {
+        return false;
+      }
+      outputs.splice(length);
+      return true;
+    }
+    return false;
+  }
+
+  function cloneRank(value: Record<string, unknown>): Record<string, unknown> {
+    return {
+      ...value,
+      outputs: Array.isArray(value.outputs)
+        ? value.outputs.map(output => cloneRecord(output))
+        : []
+    };
+  }
+
+  function cloneRecord(value: unknown): Record<string, unknown> {
+    return isRecord(value) ? { ...value } : {};
+  }
+
+  function asText(value: unknown): string {
+    return Array.isArray(value)
+      ? value.map(item => String(item)).join('')
+      : String(value ?? '');
   }
 }

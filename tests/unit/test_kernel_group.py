@@ -197,6 +197,41 @@ def test_output_buffer_applies_stream_display_and_clear_updates() -> None:
     assert buffer.snapshot()[0].content["text"] == "after clear\n"
 
 
+def test_output_buffer_stream_patches_stay_incremental_for_long_logs() -> None:
+    buffer = _RankOutputBuffer(0)
+
+    assert buffer.handle("stream", {"name": "stdout", "text": "start"})
+    first = buffer.take_patches()
+    assert len(first) == 1
+    assert first[0].kind == "append_output"
+
+    transmitted = 0
+    for _ in range(10_000):
+        assert buffer.handle("stream", {"name": "stdout", "text": "x"})
+        patches = buffer.take_patches()
+        assert len(patches) == 1
+        assert patches[0].kind == "append_stream"
+        assert patches[0].text == "x"
+        transmitted += len(patches[0].text or "")
+
+    assert transmitted == 10_000
+    assert buffer.snapshot()[0].content["text"] == "start" + "x" * 10_000
+
+
+def test_output_buffer_uses_replacement_patches_for_terminal_rewrites() -> None:
+    buffer = _RankOutputBuffer(0)
+    buffer.handle("stream", {"name": "stderr", "text": "Loading: 0%"})
+    buffer.take_patches()
+
+    assert buffer.handle("stream", {"name": "stderr", "text": "\rLoading: 50%"})
+    patch = buffer.take_patches()
+
+    assert len(patch) == 1
+    assert patch[0].kind == "replace_output"
+    assert patch[0].output is not None
+    assert patch[0].output.content["text"] == "Loading: 50%"
+
+
 @pytest.mark.asyncio
 async def test_restart_replaces_every_rank_and_world_size() -> None:
     group = DistributedKernelGroup(2)

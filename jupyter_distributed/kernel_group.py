@@ -9,7 +9,7 @@ import socket
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
-from .protocol import GroupExecution, GroupStatus, RankExecution, RankOutput
+from .protocol import GroupExecution, GroupStatus, RankExecution, RankOutput, RankOutputPatch
 from .rank_kernel import (
     CommEventCallback,
     DebugEventCallback,
@@ -104,10 +104,14 @@ class DistributedKernelGroup:
                 rank.rank: () for rank in self._ranks
             }
 
-            async def capture_output(rank: int, outputs: tuple[RankOutput, ...]) -> None:
+            async def capture_output(
+                rank: int,
+                outputs: tuple[RankOutput, ...],
+                patches: tuple[RankOutputPatch, ...],
+            ) -> None:
                 latest_outputs[rank] = outputs
                 if on_output is not None:
-                    notified = on_output(rank, outputs)
+                    notified = on_output(rank, outputs, patches)
                     if inspect.isawaitable(notified):
                         await notified
 
