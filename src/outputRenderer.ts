@@ -481,10 +481,10 @@ namespace Private {
           model.appendStreamOutput(nextText.slice(currentText.length));
         } else {
           // Snapshot transport has already applied carriage returns and
-          // backspaces. Recreate only this stream renderer when its text was
-          // rewritten; ordinary append-only streams stay fully incremental.
-          model.remove(index);
-          model.add(next);
+          // backspaces. Replace this output in place when its text was
+          // rewritten; removing and re-adding would leave OutputAreaModel's
+          // private stream cursor pointed at the preceding output.
+          model.set(index, next);
         }
       } else {
         model.set(index, next);
