@@ -189,9 +189,7 @@ test.describe('distributed notebook rendering', () => {
     await page.notebook.waitForRun(0);
     await expect(output).toHaveCount(1);
     await expect(output).toContainText('end-0');
-    await expect(rankZeroOutput.locator('.jp-OutputArea-output')).toHaveCount(3);
     await expect(output).toContainText('progress-0-2');
-    await expect(output).not.toContainText('progress-0-0');
     const rankZeroText = (await rankZeroOutput.textContent()) ?? '';
     expect(rankZeroText.match(/Tensor parallel streaming works/g)).toHaveLength(
       1
@@ -204,12 +202,61 @@ test.describe('distributed notebook rendering', () => {
     await expect(rankOneOutput).toContainText('env-1-2');
     await expect(rankOneOutput).toContainText('progress-1-2');
     await expect(rankOneOutput).toContainText('end-1');
-    await expect(rankOneOutput.locator('.jp-OutputArea-output')).toHaveCount(3);
     const rankOneText = (await rankOneOutput.textContent()) ?? '';
     expect(rankOneText.match(/Tensor parallel streaming works/g)).toHaveLength(
       1
     );
     expect(rankOneText.match(/progress-1-2/g)).toHaveLength(1);
+
+    const progressCell = await addCodeCell(
+      page,
+      [
+        'import os, sys, time',
+        'rank = int(os.environ["RANK"])',
+        'for progress in ["0%", "50%", "100%"]:',
+        '    sys.stderr.write(f"\\rLoading rank {rank}: {progress}")',
+        '    sys.stderr.flush()',
+        '    time.sleep(0.15)',
+        'sys.stderr.write("\\n")',
+        'sys.stderr.flush()',
+        'f"MODEL_ARCHITECTURE_{rank}"'
+      ].join('\n')
+    );
+    await page.notebook.runCell(progressCell, { inplace: true });
+    const progressOutput = await cellOutput(page, progressCell);
+    const rankZeroProgress = progressOutput.locator(
+      '.jp-JupyterDistributedRankOutput-rank[data-rank="0"]'
+    );
+    const rankOneProgress = progressOutput.locator(
+      '.jp-JupyterDistributedRankOutput-rank[data-rank="1"]'
+    );
+    await expect(rankZeroProgress).toBeVisible();
+    await expect(rankOneProgress).toBeHidden();
+    await expect(rankZeroProgress.locator('.jp-OutputArea-output')).toHaveCount(
+      2
+    );
+    await expect(rankZeroProgress).toContainText('Loading rank 0: 100%');
+    await expect(rankZeroProgress).not.toContainText('Loading rank 0: 0%');
+    await expect(rankZeroProgress).not.toContainText('Loading rank 0: 50%');
+    expect(
+      await rankZeroProgress
+        .getByText("'MODEL_ARCHITECTURE_0'", { exact: true })
+        .count()
+    ).toBe(1);
+    await selectOutputRank(progressOutput, 1);
+    await expect(rankZeroProgress).toBeHidden();
+    await expect(rankOneProgress).toBeVisible();
+    await expect(rankOneProgress.locator('.jp-OutputArea-output')).toHaveCount(
+      2
+    );
+    await expect(rankOneProgress).toContainText('Loading rank 1: 100%');
+    await expect(rankOneProgress).not.toContainText('Loading rank 1: 0%');
+    await expect(rankOneProgress).not.toContainText('Loading rank 1: 50%');
+    expect(
+      await rankOneProgress
+        .getByText("'MODEL_ARCHITECTURE_1'", { exact: true })
+        .count()
+    ).toBe(1);
 
     const rankOnlyCell = await addCodeCell(
       page,
