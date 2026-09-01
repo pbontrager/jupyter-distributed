@@ -368,10 +368,18 @@ class ProcessSelector extends Widget {
       }
       throw error;
     }
-    return this._request(kernelId, 'POST', {
+    const committed = await this._request(kernelId, 'POST', {
       action: 'commit',
       restart_token: restartToken
     });
+    // KernelConnection.restart() resolves once its websocket reconnects, which
+    // can precede the replacement kernel becoming responsive. Keep the process
+    // control pending until a shell round trip confirms that execution is safe.
+    const info = await kernel.requestKernelInfo();
+    if (!info || info.content.status === 'error') {
+      throw new Error('The restarted kernel did not become ready.');
+    }
+    return committed;
   }
 
   private _panel: NotebookPanel;
