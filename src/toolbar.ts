@@ -20,11 +20,20 @@ type KernelRequestBody =
   | { action: 'prepare'; world_size: number }
   | { action: 'commit' | 'abort'; restart_token: string };
 
+type KernelConfiguredCallback = (
+  panel: NotebookPanel,
+  restarted: boolean
+) => void;
+
 class ProcessSelector extends Widget {
-  constructor(panel: NotebookPanel) {
+  constructor(
+    panel: NotebookPanel,
+    onKernelConfigured: KernelConfiguredCallback
+  ) {
     super({ node: Private.createNode() });
     this.addClass('jp-JupyterDistributedProcessSelector');
     this._panel = panel;
+    this._onKernelConfigured = onKernelConfigured;
     this._input = this.node.querySelector('input')!;
 
     this._input.addEventListener('click', this._onClick);
@@ -141,6 +150,7 @@ class ProcessSelector extends Widget {
       const targetWorldSize = savedWorldSize ?? model.world_size;
       if (model.proxied && targetWorldSize === model.world_size) {
         this._setWorldSize(model.world_size);
+        this._onKernelConfigured(this._panel, false);
         return;
       }
 
@@ -153,6 +163,7 @@ class ProcessSelector extends Widget {
       });
       if (kernelId === this._kernelId()) {
         this._setWorldSize(restored.world_size);
+        this._onKernelConfigured(this._panel, true);
       }
     } catch (error) {
       // Keep the default value if the server extension is unavailable.
@@ -224,6 +235,7 @@ class ProcessSelector extends Widget {
       if (current.proxied && next === current.world_size) {
         this._setWorldSize(next);
         this._saveWorldSize(next);
+        this._onKernelConfigured(this._panel, false);
         return current;
       }
 
@@ -253,6 +265,7 @@ class ProcessSelector extends Widget {
       }
       this._setWorldSize(model.world_size);
       this._saveWorldSize(model.world_size);
+      this._onKernelConfigured(this._panel, true);
       return model;
     } catch (error) {
       if (kernelId === this._kernelId()) {
@@ -378,10 +391,15 @@ class ProcessSelector extends Widget {
   private _pending = false;
   private _ready = false;
   private _input: HTMLInputElement;
+  private _onKernelConfigured: KernelConfiguredCallback;
   private _syncRequest = 0;
 }
 
 export class ProcessToolbarController {
+  constructor(onKernelConfigured?: KernelConfiguredCallback) {
+    this._onKernelConfigured = onKernelConfigured ?? (() => undefined);
+  }
+
   async setWorldSize(
     panel: NotebookPanel,
     worldSize: number,
@@ -395,7 +413,7 @@ export class ProcessToolbarController {
   }
 
   createSelector(panel: NotebookPanel): Widget {
-    const selector = new ProcessSelector(panel);
+    const selector = new ProcessSelector(panel, this._onKernelConfigured);
     this._selectors.set(panel, selector);
     selector.disposed.connect(() => {
       if (this._selectors.get(panel) === selector) {
@@ -405,6 +423,7 @@ export class ProcessToolbarController {
     return selector;
   }
 
+  private _onKernelConfigured: KernelConfiguredCallback;
   private _selectors = new WeakMap<NotebookPanel, ProcessSelector>();
 }
 

@@ -7,17 +7,14 @@ import { Signal } from '@lumino/signaling';
 import { Panel, TabBar, Widget } from '@lumino/widgets';
 
 import { RANK_MIME_TYPE } from './constants';
+import {
+  executionId,
+  RankUpdateModel,
+  RankUpdateSnapshot
+} from './rankUpdates';
 
 export const MIME_TYPE = RANK_MIME_TYPE;
 const MIN_RANK_TAB_WIDTH = 72;
-
-function executionId(value: unknown): string | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return null;
-  }
-  const id = (value as Record<string, unknown>).execution_id;
-  return typeof id === 'string' && id ? id : null;
-}
 
 interface RankRecord {
   rank: number;
@@ -62,14 +59,17 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
   constructor(
     options: IRenderMime.IRendererOptions,
     rendermime: IRenderMimeRegistry,
-    selections: RankSelectionModel
+    selections: RankSelectionModel,
+    updates: RankUpdateModel
   ) {
     super();
     this.addClass('jp-JupyterDistributedRankOutput');
     this._mimeType = options.mimeType;
     this._rendermime = rendermime;
     this._selections = selections;
+    this._updates = updates;
     selections.changed.connect(this._onSelectionChanged, this);
+    updates.changed.connect(this._onRankUpdate, this);
     this._resizeObserver = new ResizeObserver(() => {
       this._updateNavigationMode();
     });
@@ -77,7 +77,14 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
   }
 
   async renderModel(model: IRenderMime.IMimeModel): Promise<void> {
-    await this._queueRender(model.data[this._mimeType], model.trusted);
+    this._trusted = model.trusted;
+    const payload = model.data[this._mimeType];
+    this._executionId = executionId(payload);
+    const snapshot = this._updates.get(this._executionId);
+    await this._queueRender(
+      snapshot?.data[this._mimeType] ?? payload,
+      model.trusted
+    );
   }
 
   private async _queueRender(
@@ -170,6 +177,7 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
       return;
     }
     this._selections.changed.disconnect(this._onSelectionChanged, this);
+    this._updates.changed.disconnect(this._onRankUpdate, this);
     this._resizeObserver.disconnect();
     this._clear();
     super.dispose();
@@ -287,6 +295,19 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
     }
   }
 
+  private _onRankUpdate(
+    sender: RankUpdateModel,
+    change: { executionId: string; snapshot: RankUpdateSnapshot }
+  ): void {
+    if (change.executionId !== this._executionId) {
+      return;
+    }
+    void this._queueRender(
+      change.snapshot.data[this._mimeType],
+      this._trusted
+    );
+  }
+
   private _onDropdownChange = (): void => {
     if (!this._rankSelect) {
       return;
@@ -327,6 +348,8 @@ export class RankOutputRenderer extends Panel implements IRenderMime.IRenderer {
   private _selectedRank = 0;
   private _selections: RankSelectionModel;
   private _tabs: TabBar<Widget> | null = null;
+  private _trusted = false;
+  private _updates: RankUpdateModel;
 }
 
 namespace Private {

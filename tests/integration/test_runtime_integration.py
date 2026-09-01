@@ -11,7 +11,7 @@ from jupyter_client.asynchronous.client import AsyncKernelClient
 
 from jupyter_distributed.coordinator import DistributedKernelCoordinator
 from jupyter_distributed.kernel_group import DistributedKernelGroup
-from jupyter_distributed.kernel_proxy import RANK_MIME
+from jupyter_distributed.kernel_proxy import RANK_MIME, RANK_UPDATE_COMM_TARGET
 
 
 def output_text(result: object) -> str:
@@ -137,6 +137,38 @@ async def execute_through_proxy(
             break
     reply = await client.get_shell_msg(timeout=5)
     return reply["content"], data
+
+
+def open_rank_update_comm(client: AsyncKernelClient) -> str:
+    comm_id = uuid4().hex
+    client.shell_channel.send(
+        client.session.msg(
+            "comm_open",
+            content={
+                "comm_id": comm_id,
+                "target_name": RANK_UPDATE_COMM_TARGET,
+                "data": {},
+            },
+        )
+    )
+    return comm_id
+
+
+def rank_update_snapshot(
+    message: dict[str, Any],
+    comm_id: str,
+    parent_id: str | None = None,
+) -> dict[str, Any] | None:
+    if (
+        message.get("msg_type") != "comm_msg"
+        or message.get("content", {}).get("comm_id") != comm_id
+    ):
+        return None
+    if parent_id is not None and message.get("parent_header", {}).get("msg_id") != parent_id:
+        return None
+    data = message["content"].get("data", {})
+    snapshot = data.get("snapshot") if data.get("method") == "update" else None
+    return snapshot if isinstance(snapshot, dict) else None
 
 
 async def debug_through_proxy(
@@ -501,6 +533,7 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
             )
         )["success"] is True
 
+        rank_update_comm_id = open_rank_update_comm(client)
         live_id = client.execute(
             "import time\n"
             "for token in ['Tensor', ' parallel', ' streaming', ' works']:\n"
@@ -509,34 +542,47 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
             "print()"
         )
         saw_live_output = False
+        final_snapshot = None
         output_messages = []
         while True:
             message = await client.get_iopub_msg(timeout=10)
+            snapshot = rank_update_snapshot(message, rank_update_comm_id, live_id)
+            if snapshot is not None:
+                final_snapshot = snapshot
+                if not snapshot["final"]:
+                    text = str(snapshot["data"][RANK_MIME]["ranks"][0]["outputs"])
+                    saw_live_output = saw_live_output or "Tensor" in text
             if message.get("parent_header", {}).get("msg_id") != live_id:
                 continue
             if message["msg_type"] in {"display_data", "update_display_data"}:
                 output_messages.append(message)
-                payload = message["content"]["data"][RANK_MIME]
-                if payload["status"] == "busy":
-                    text = str(payload["ranks"][0]["outputs"])
-                    saw_live_output = saw_live_output or "Tensor" in text
             if message["msg_type"] == "status" and message["content"]["execution_state"] == "idle":
                 break
         live_reply = await client.get_shell_msg(timeout=5)
         assert live_reply["content"]["status"] == "ok"
         assert saw_live_output
-        assert output_messages[0]["msg_type"] == "display_data"
-        assert all(message["msg_type"] == "update_display_data" for message in output_messages[1:])
+        assert [message["msg_type"] for message in output_messages] == [
+            "display_data",
+            "update_display_data",
+        ]
         display_ids = [message["content"]["transient"]["display_id"] for message in output_messages]
         assert len(set(display_ids)) == 1
         assert output_messages[0]["content"]["data"][RANK_MIME]["status"] == "busy"
         assert output_messages[-1]["content"]["data"][RANK_MIME]["status"] == "ok"
+        assert final_snapshot is not None
+        assert final_snapshot["final"] is True
         assert len(output_messages[-1]["content"]["data"][RANK_MIME]["ranks"]) == 2
         final_outputs = output_messages[-1]["content"]["data"][RANK_MIME]["ranks"]
         assert [rank["outputs"][0]["content"]["text"] for rank in final_outputs] == [
             "Tensor parallel streaming works\n",
             "Tensor parallel streaming works\n",
         ]
+        client.shell_channel.send(
+            client.session.msg(
+                "comm_close",
+                content={"comm_id": rank_update_comm_id, "data": {}},
+            )
+        )
 
         display_id = client.execute(
             "from IPython.display import display\n"

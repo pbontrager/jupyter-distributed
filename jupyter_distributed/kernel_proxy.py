@@ -24,6 +24,7 @@ from .protocol import GroupExecution, RankExecution, RankOutput
 from .rank_magic import RankMagicError, parse_rank_cell
 
 RANK_MIME = "application/vnd.jupyter-distributed.rank+json"
+RANK_UPDATE_COMM_TARGET = "jupyter.distributed.rank_updates"
 _STREAM_UPDATE_INTERVAL = 0.05
 _ON_KERNEL_IO_LOOP: ContextVar[bool] = ContextVar(
     "jupyter_distributed_on_kernel_io_loop", default=False
@@ -59,7 +60,7 @@ def _visible_ranks(execution: GroupExecution, target_rank: int | None) -> tuple[
 
 
 class _LiveRankDisplay:
-    """Publish one durable, rank-aware output through standard Jupyter messages."""
+    """Publish durable output once and carry transient snapshots over a comm."""
 
     def __init__(
         self,
@@ -89,6 +90,7 @@ class _LiveRankDisplay:
             payload = execution.as_dict()
             if self._target_rank is not None:
                 payload["target_rank"] = self._target_rank
+            self._kernel.live_updates.publish(self._snapshot(payload, execution=execution))
             self._send_display(
                 "update_display_data",
                 self._data(payload, execution=execution),
@@ -100,6 +102,7 @@ class _LiveRankDisplay:
             self._started = True
             payload = self._live_payload()
             self._send_display("display_data", self._data(payload))
+            self._kernel.live_updates.publish(self._snapshot(payload))
             return
         if self._flush_task is not None:
             return
@@ -121,10 +124,12 @@ class _LiveRankDisplay:
         if self._target_rank is not None:
             payload["target_rank"] = self._target_rank
         if self._started:
+            self._kernel.live_updates.publish(self._snapshot(payload, execution=execution))
             self._send_display("update_display_data", self._data(payload, execution=execution))
         else:
             self._started = True
             self._send_display("display_data", self._data(payload, execution=execution))
+            self._kernel.live_updates.publish(self._snapshot(payload, execution=execution))
 
     def _updated_execution(self) -> GroupExecution:
         assert self._execution is not None
@@ -148,7 +153,7 @@ class _LiveRankDisplay:
         self._flush_task = None
         if self._dirty:
             payload = self._live_payload()
-            self._send_display("update_display_data", self._data(payload))
+            self._kernel.live_updates.publish(self._snapshot(payload))
             self._last_sent = asyncio.get_running_loop().time()
             self._dirty = False
 
@@ -170,6 +175,19 @@ class _LiveRankDisplay:
         if self._target_rank is not None:
             payload["target_rank"] = self._target_rank
         return payload
+
+    def _snapshot(
+        self,
+        payload: dict[str, Any],
+        *,
+        execution: GroupExecution | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "execution_id": self._execution_id,
+            "final": execution is not None,
+            "data": self._data(payload, execution=execution),
+            "metadata": {},
+        }
 
     def _data(
         self,
@@ -203,6 +221,71 @@ class _LiveRankDisplay:
         self._dirty = False
 
 
+class _LiveRankUpdates:
+    """Broadcast the latest transient rank snapshot to connected frontends."""
+
+    def __init__(self, kernel: SPMDKernel) -> None:
+        self._kernel = kernel
+        self._subscribers: set[str] = set()
+        self._latest: dict[str, Any] | None = None
+
+    def handle_frontend(self, message_type: str, message: Mapping[str, Any]) -> bool:
+        content = message.get("content", {})
+        if not isinstance(content, Mapping):
+            return False
+        comm_id = content.get("comm_id")
+        if not isinstance(comm_id, str) or not comm_id:
+            return False
+
+        if message_type == "comm_open":
+            if content.get("target_name") != RANK_UPDATE_COMM_TARGET:
+                return False
+            self._subscribers.add(comm_id)
+            self._send(
+                comm_id,
+                {
+                    "method": "snapshots",
+                    "snapshots": [self._latest] if self._latest is not None else [],
+                },
+            )
+            return True
+
+        if comm_id not in self._subscribers:
+            return False
+        if message_type == "comm_close":
+            self._subscribers.discard(comm_id)
+        elif message_type == "comm_msg":
+            data = content.get("data", {})
+            if isinstance(data, Mapping) and data.get("method") == "request_snapshots":
+                self._send(
+                    comm_id,
+                    {
+                        "method": "snapshots",
+                        "snapshots": [self._latest] if self._latest is not None else [],
+                    },
+                )
+        return True
+
+    def publish(self, snapshot: dict[str, Any]) -> None:
+        self._latest = snapshot
+        for comm_id in tuple(self._subscribers):
+            self._send(comm_id, {"method": "update", "snapshot": snapshot})
+
+    def comm_info(self) -> dict[str, dict[str, str]]:
+        return {comm_id: {"target_name": RANK_UPDATE_COMM_TARGET} for comm_id in self._subscribers}
+
+    def reset(self) -> None:
+        self._subscribers.clear()
+        self._latest = None
+
+    def _send(self, comm_id: str, data: dict[str, Any]) -> None:
+        self._kernel.send_response(
+            self._kernel.iopub_socket,
+            "comm_msg",
+            {"comm_id": comm_id, "data": data},
+        )
+
+
 class SPMDKernel(Kernel):
     """One notebook kernel whose executions fan out to persistent rank kernels."""
 
@@ -224,6 +307,7 @@ class SPMDKernel(Kernel):
         super().__init__(**kwargs)
         self._debugger = DistributedDebugger(self)
         self._comms = DistributedCommRouter(self)
+        self.live_updates = _LiveRankUpdates(self)
         self._process_registry = ChildProcessRegistry.from_environment()
         self.group = DistributedKernelGroup(
             int(os.environ.get("JUPYTER_DISTRIBUTED_WORLD_SIZE", "1")),
@@ -418,6 +502,8 @@ class SPMDKernel(Kernel):
             await self._run_on_kernel_io_loop(lambda: self.comm_open(stream, ident, parent))
             return
         await self._ensure_started()
+        if self.live_updates.handle_frontend("comm_open", parent):
+            return
         await self._comms.handle_frontend("comm_open", parent)
 
     async def comm_msg(self, stream: Any, ident: Any, parent: Mapping[str, Any]) -> None:
@@ -425,6 +511,8 @@ class SPMDKernel(Kernel):
             await self._run_on_kernel_io_loop(lambda: self.comm_msg(stream, ident, parent))
             return
         await self._ensure_started()
+        if self.live_updates.handle_frontend("comm_msg", parent):
+            return
         await self._comms.handle_frontend("comm_msg", parent)
 
     async def comm_close(self, stream: Any, ident: Any, parent: Mapping[str, Any]) -> None:
@@ -432,6 +520,8 @@ class SPMDKernel(Kernel):
             await self._run_on_kernel_io_loop(lambda: self.comm_close(stream, ident, parent))
             return
         await self._ensure_started()
+        if self.live_updates.handle_frontend("comm_close", parent):
+            return
         await self._comms.handle_frontend("comm_close", parent)
 
     async def comm_info_request(self, stream: Any, ident: Any, parent: Mapping[str, Any]) -> None:
@@ -445,6 +535,8 @@ class SPMDKernel(Kernel):
         await self._ensure_started()
         target_name = parent.get("content", {}).get("target_name")
         comms = self._comms.comm_info(str(target_name) if target_name is not None else None)
+        if target_name is None or target_name == RANK_UPDATE_COMM_TARGET:
+            comms.update(self.live_updates.comm_info())
         content = {"status": "ok", "comms": comms}
         self.session.send(stream, "comm_info_reply", content, parent, ident)
 
@@ -455,6 +547,7 @@ class SPMDKernel(Kernel):
         try:
             await self.group.shutdown(now=True)
             self._comms.reset()
+            self.live_updates.reset()
         finally:
             health = await asyncio.gather(
                 *(rank.is_alive() for rank in ranks), return_exceptions=True

@@ -17,6 +17,7 @@ import {
 import { RANK_MIME_TYPE } from './constants';
 import { DebuggerRankSelector } from './debuggerRank';
 import { DistributedOutputReconciler } from './outputReconciler';
+import { RankUpdateComm, RankUpdateModel } from './rankUpdates';
 import { ProcessToolbarController } from './toolbar';
 
 const notebookPlugin: JupyterFrontEndPlugin<void> = {
@@ -31,7 +32,22 @@ const notebookPlugin: JupyterFrontEndPlugin<void> = {
     toolbarRegistry: IToolbarWidgetRegistry
   ): void => {
     const rankSelections = new RankSelectionModel();
-    const processControls = new ProcessToolbarController();
+    const rankUpdates = new RankUpdateModel();
+    const updateComms = new WeakMap<NotebookPanel, RankUpdateComm>();
+    const commFor = (panel: NotebookPanel): RankUpdateComm => {
+      let comm = updateComms.get(panel);
+      if (!comm) {
+        comm = new RankUpdateComm(panel, rankUpdates);
+        updateComms.set(panel, comm);
+      }
+      return comm;
+    };
+    const processControls = new ProcessToolbarController(
+      (panel, restarted) => {
+        const comm = commFor(panel);
+        void (restarted ? comm.reconnect() : comm.ensureConnected());
+      }
+    );
 
     toolbarRegistry.addFactory<NotebookPanel>(
       'Notebook',
@@ -117,20 +133,24 @@ const notebookPlugin: JupyterFrontEndPlugin<void> = {
       }
     });
 
-    rendermime.addFactory(Private.rendererFactory(rendermime, rankSelections), 0);
+    rendermime.addFactory(
+      Private.rendererFactory(rendermime, rankSelections, rankUpdates),
+      0
+    );
 
     const reconciledPanels = new WeakSet<NotebookPanel>();
     const registerNotebookRenderer = (panel: NotebookPanel): void => {
       const contextual = panel.content.rendermime;
       contextual.removeMimeType(MIME_TYPE);
       contextual.addFactory(
-        Private.rendererFactory(contextual, rankSelections),
+        Private.rendererFactory(contextual, rankSelections, rankUpdates),
         0
       );
       if (!reconciledPanels.has(panel)) {
         reconciledPanels.add(panel);
         new DistributedOutputReconciler(panel);
       }
+      commFor(panel);
     };
     notebooks.forEach(registerNotebookRenderer);
     notebooks.widgetAdded.connect((_sender, panel) => {
@@ -184,13 +204,14 @@ export default [notebookPlugin, debuggerPlugin];
 namespace Private {
   export function rendererFactory(
     rendermime: IRenderMimeRegistry,
-    selections: RankSelectionModel
+    selections: RankSelectionModel,
+    updates: RankUpdateModel
   ): IRenderMime.IRendererFactory {
     return {
       mimeTypes: [MIME_TYPE],
       safe: true,
       createRenderer: options =>
-        new RankOutputRenderer(options, rendermime, selections)
+        new RankOutputRenderer(options, rendermime, selections, updates)
     };
   }
 
