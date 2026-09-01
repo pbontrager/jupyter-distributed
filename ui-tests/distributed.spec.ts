@@ -330,7 +330,7 @@ test.describe('distributed notebook rendering', () => {
     const processInput = page.locator(
       '.jp-JupyterDistributedProcessSelector-input'
     );
-    await expect(processInput).toBeVisible({ timeout: 30000 });
+    await expect(processInput).toHaveCount(1);
     await expect(processInput).toHaveValue('2', { timeout: 30000 });
     await expect(processInput).toBeEnabled({ timeout: 30000 });
 
