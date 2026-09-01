@@ -17,10 +17,46 @@ class FakeSpec:
 
 
 @dataclass
+class FakeSession:
+    session: str = "manager-session"
+
+    def clone(self) -> FakeSession:
+        return FakeSession(self.session)
+
+
+@dataclass
 class FakeKernel:
     kernel_name: str = "custom-python"
     kernel_spec: FakeSpec = field(default_factory=FakeSpec)
     _launch_args: dict[str, Any] = field(default_factory=lambda: {"cwd": "/notebooks"})
+    ready_checks: int = 0
+    session: FakeSession = field(default_factory=FakeSession)
+
+    def client(self, **kwargs: Any) -> FakeKernelClient:
+        assert kwargs["session"] is not None
+        return FakeKernelClient(self)
+
+
+class FakeKernelClient:
+    def __init__(self, kernel: FakeKernel) -> None:
+        self.kernel = kernel
+
+    def start_channels(self) -> None:
+        pass
+
+    def kernel_info(self) -> str:
+        return "ready-request"
+
+    async def get_shell_msg(self, timeout: float) -> dict[str, Any]:
+        assert timeout == 1
+        self.kernel.ready_checks += 1
+        return {
+            "msg_type": "kernel_info_reply",
+            "parent_header": {"msg_id": "ready-request"},
+        }
+
+    def stop_channels(self) -> None:
+        pass
 
 
 class FakeKernelManager:
@@ -67,6 +103,7 @@ async def test_keeps_every_process_count_on_the_internal_proxy(tmp_path: Any) ->
     assert manager.kernel._launch_args["env"]["JUPYTER_DISTRIBUTED_REGISTRY_FILE"] == str(
         tmp_path / "kernel-id.json"
     )
+    assert manager.kernel.ready_checks == 2
 
     single_again = await coordinator.set_world_size("kernel-id", 1)
 
@@ -76,6 +113,7 @@ async def test_keeps_every_process_count_on_the_internal_proxy(tmp_path: Any) ->
     assert manager.kernel.kernel_spec.interrupt_mode == "message"
     assert manager.kernel._launch_args["env"]["JUPYTER_DISTRIBUTED_WORLD_SIZE"] == "1"
     assert manager.restarts == 3
+    assert manager.kernel.ready_checks == 3
 
 
 @pytest.mark.asyncio
@@ -136,6 +174,7 @@ async def test_client_managed_restart_can_be_committed_or_rolled_back(tmp_path: 
     assert committed["proxied"] is True
     assert committed["world_size"] == 3
     assert manager.restarts == 0
+    assert manager.kernel.ready_checks == 1
 
     unchanged = await coordinator.prepare_world_size("kernel-id", 3)
     assert unchanged["restart_required"] is False

@@ -9,6 +9,7 @@ import uuid
 from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
+from queue import Empty
 from typing import Any
 
 from jupyter_core.paths import jupyter_runtime_dir
@@ -151,6 +152,7 @@ class DistributedKernelCoordinator:
 
             try:
                 await self.kernel_manager.restart_kernel(kernel_id)
+                await self._wait_for_ready(kernel)
             except BaseException:
                 if previously_proxied:
                     self.launch_adapter.configure_proxy(
@@ -206,6 +208,7 @@ class DistributedKernelCoordinator:
             if prepared is None or prepared.token != token:
                 raise ValueError("Unknown or expired kernel restart token")
             if commit:
+                await self._wait_for_ready(kernel)
                 state.world_size = prepared.world_size
                 state.proxied = True
                 self._prepared_restarts.pop(kernel_id, None)
@@ -246,6 +249,36 @@ class DistributedKernelCoordinator:
 
     def _kernel(self, kernel_id: str) -> Any:
         return self.kernel_manager.get_kernel(kernel_id)
+
+    @staticmethod
+    async def _wait_for_ready(kernel: Any) -> None:
+        """Wait until a restarted kernel can complete a protocol round trip."""
+
+        # KernelManager.client() otherwise reuses the manager's Session. A
+        # distinct identity is required when other clients already have ZMQ
+        # channels open, or the readiness reply can reach the wrong socket.
+        session = kernel.session.clone()
+        session.session = str(uuid.uuid4())
+        client = kernel.client(session=session)
+        client.start_channels()
+        try:
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 30
+            pending: set[str] = set()
+            while loop.time() < deadline:
+                pending.add(client.kernel_info())
+                try:
+                    reply = await client.get_shell_msg(timeout=1)
+                except Empty:
+                    continue
+                if (
+                    reply.get("msg_type") == "kernel_info_reply"
+                    and reply.get("parent_header", {}).get("msg_id") in pending
+                ):
+                    return
+            raise RuntimeError("Kernel did not become ready within 30 seconds")
+        finally:
+            client.stop_channels()
 
 
 __all__ = ["DistributedKernelCoordinator", "DistributedKernelState", "KernelLaunchAdapter"]
