@@ -14,7 +14,8 @@ module.exports = {
   use: {
     ...base.use,
     baseURL: 'http://127.0.0.1:9988',
-    video: 'on',
+    video:
+      process.env.PLAYWRIGHT_VIDEO === '1' ? 'on' : 'retain-on-failure',
     trace: 'retain-on-failure',
     launchOptions: process.env.PLAYWRIGHT_EXECUTABLE_PATH
       ? { executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH }
