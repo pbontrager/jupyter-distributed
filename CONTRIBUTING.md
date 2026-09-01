@@ -14,10 +14,24 @@ For frontend changes, also install the JavaScript dependencies:
 
 ```bash
 uv run --with nodeenv python -m nodeenv --node=20.19.0 .nodeenv
-PATH="$PWD/.nodeenv/bin:$PATH" corepack yarn install --frozen-lockfile
+source .nodeenv/bin/activate
+corepack enable
+yarn install --frozen-lockfile
 ```
 
-Launch the development environment with `uv run jupyter lab`.
+Keep `.nodeenv` activated while running the frontend commands below. In a new
+shell, reactivate it with `source .nodeenv/bin/activate`.
+
+Build and link the source extension, then launch the development server:
+
+```bash
+yarn develop
+uv run jupyter lab
+```
+
+This server is for interactive development. The browser test command below
+builds and links the extension itself, then starts and stops an isolated
+JupyterLab server on port `9988`; do not start a server manually first.
 
 ## Test
 
@@ -25,9 +39,7 @@ Launch the development environment with `uv run jupyter lab`.
 uv run ruff format --check .
 uv run ruff check .
 uv run pytest
-PATH="$PWD/.nodeenv/bin:$PATH" npm run build:lib
-JUPYTERLAB_CORE="$(uv run python -c 'import pathlib, jupyterlab; print(pathlib.Path(jupyterlab.__file__).parent / "staging")')"
-PATH="$PWD/.nodeenv/bin:$PATH" npx --no-install build-labextension . --core-path "$JUPYTERLAB_CORE"
+yarn test:browser
 ```
 
 GPU demos run when at least two CUDA devices are available and otherwise skip.

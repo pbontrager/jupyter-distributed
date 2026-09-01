@@ -9,6 +9,7 @@ async function setProcesses(
   processes: number
 ): Promise<void> {
   const input = page.locator('.jp-JupyterDistributedProcessSelector-input');
+  await expect(input).toBeVisible({ timeout: 30000 });
   await expect(input).toBeEnabled({ timeout: 30000 });
   await input.fill(String(processes));
   await input.press('Enter');
@@ -48,18 +49,25 @@ test.describe('distributed notebook rendering', () => {
     await expect(output).toContainText('end-1');
 
     await page.notebook.clickToolbarItem('restart');
-    await page.getByRole('dialog').getByRole('button', { name: 'Restart' }).click();
+    await page
+      .getByRole('dialog')
+      .getByRole('button', { name: 'Confirm Kernel Restart', exact: true })
+      .click();
     await expect(
       page.locator('.jp-JupyterDistributedProcessSelector-input')
     ).toBeEnabled({ timeout: 30000 });
+    expect(await page.notebook.save()).toBe(true);
 
-    await page.reload();
-    await page.waitForCondition(
-      async () => await page.notebook.isOpen('distributed.ipynb')
-    );
+    await page.reload({ waitForIsReady: false });
+    await expect(
+      page
+        .getByRole('main')
+        .getByRole('tabpanel', { name: 'distributed.ipynb' })
+    ).toBeVisible({ timeout: 30000 });
     const processInput = page.locator(
       '.jp-JupyterDistributedProcessSelector-input'
     );
+    await expect(processInput).toBeVisible({ timeout: 30000 });
     await expect(processInput).toHaveValue('2', { timeout: 30000 });
     await expect(processInput).toBeEnabled({ timeout: 30000 });
 

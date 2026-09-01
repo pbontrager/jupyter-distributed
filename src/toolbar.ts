@@ -60,9 +60,15 @@ class ProcessSelector extends Widget {
     return this._panel.sessionContext.session?.kernel?.id;
   }
 
+  private _kernelConnected(): boolean {
+    return (
+      this._panel.sessionContext.session?.kernel?.connectionStatus ===
+      'connected'
+    );
+  }
+
   private _syncVisibility(): void {
-    const kernel = this._panel.sessionContext.session?.kernel;
-    const connected = kernel?.connectionStatus === 'connected';
+    const connected = this._kernelConnected();
     this.setHidden(false);
     this._input.disabled = !connected || this._pending;
     this.node.title = connected
@@ -72,7 +78,7 @@ class ProcessSelector extends Widget {
 
   private _onKernelChanged = (): void => {
     this._syncVisibility();
-    if (this._ready && !this._pending) {
+    if (this._ready && !this._pending && this._kernelConnected()) {
       void this._syncFromServer();
     }
   };
@@ -82,8 +88,7 @@ class ProcessSelector extends Widget {
     if (
       this._ready &&
       !this._pending &&
-      this._panel.sessionContext.session?.kernel?.connectionStatus ===
-        'connected'
+      this._kernelConnected()
     ) {
       void this._syncFromServer();
     }
@@ -99,20 +104,26 @@ class ProcessSelector extends Widget {
     }
     this._ready = true;
     this._syncVisibility();
-    await this._syncFromServer();
+    if (this._kernelConnected()) {
+      await this._syncFromServer();
+    }
   }
 
   private async _syncFromServer(): Promise<void> {
     const kernelId = this._kernelId();
     const request = ++this._syncRequest;
     let synchronizing = false;
-    if (!kernelId) {
+    if (!kernelId || !this._kernelConnected()) {
       return;
     }
 
     try {
       const model = await this._request(kernelId, 'GET');
-      if (request !== this._syncRequest || kernelId !== this._kernelId()) {
+      if (
+        request !== this._syncRequest ||
+        kernelId !== this._kernelId() ||
+        !this._kernelConnected()
+      ) {
         return;
       }
       const savedWorldSize = this._savedWorldSize();

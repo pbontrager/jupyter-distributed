@@ -16,4 +16,10 @@ def _jupyter_server_extension_points() -> list[dict[str, str]]:
     return [{"module": "jupyter_distributed.server_extension"}]
 
 
+def _jupyter_labextension_paths() -> list[dict[str, str]]:
+    """Advertise the source extension for editable development installs."""
+
+    return [{"src": "labextension", "dest": "jupyter-distributed"}]
+
+
 __all__ = ["__version__"]

@@ -13,14 +13,15 @@
   "types": "lib/index.d.ts",
   "style": "style/index.css",
   "scripts": {
-    "build": "jlpm build:lib && jlpm build:labextension:dev",
+    "build": "yarn build:lib && yarn build:labextension:dev",
     "build:lib": "tsc",
-    "build:labextension": "jupyter labextension build .",
-    "build:labextension:dev": "jupyter labextension build . --development True",
+    "build:labextension": "uv run jupyter-builder build .",
+    "build:labextension:dev": "uv run jupyter-builder build . --development True",
     "clean": "jlpm clean:lib && jlpm clean:labextension",
     "clean:lib": "rimraf lib tsconfig.tsbuildinfo",
     "clean:labextension": "rimraf jupyter_distributed/labextension",
-    "test:browser": "playwright test"
+    "develop": "yarn build && uv run jupyter-builder develop . --overwrite",
+    "test:browser": "yarn build:lib && yarn build:labextension && uv run jupyter-builder develop . --overwrite && playwright test"
   },
   "dependencies": {
     "@jupyterlab/application": "^4.0.0",
@@ -50,7 +51,7 @@
     "outputDir": "jupyter_distributed/labextension",
     "schemaDir": "schema",
     "_build": {
-      "load": "static/remoteEntry.5904063f82f3c233.js",
+      "load": "static/remoteEntry.5cf2d288c1551f60.js",
       "extension": "./extension",
       "style": "./style"
     }

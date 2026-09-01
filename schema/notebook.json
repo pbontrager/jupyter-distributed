@@ -4,8 +4,12 @@
   "jupyter.lab.toolbars": {
     "Notebook": [
       {
+        "name": "kernelName",
+        "rank": 970
+      },
+      {
         "name": "jupyter-distributed-processes",
-        "rank": 1001
+        "rank": 980
       }
     ]
   },
