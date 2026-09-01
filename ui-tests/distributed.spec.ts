@@ -105,6 +105,28 @@ async function expectSelectedOutputRank(
   ).not.toBe('rgba(0, 0, 0, 0)');
 }
 
+async function notebookToolbarOrder(
+  page: IJupyterLabPageFixture
+): Promise<string[]> {
+  return page.evaluate(() => {
+    const toolbar = document.querySelector(
+      '.jp-NotebookPanel > .jp-Toolbar'
+    );
+    const processInput = document.querySelector(
+      '.jp-JupyterDistributedProcessSelector-input'
+    );
+    const popup = processInput?.closest('.jp-Toolbar-responsive-popup');
+    const items = [
+      ...Array.from(toolbar?.children ?? []),
+      ...Array.from(popup?.children ?? [])
+    ];
+    return items
+      .map(item => (item as HTMLElement).dataset.jpItemName)
+      .filter((name): name is string => Boolean(name))
+      .filter(name => name !== 'toolbar-popup-opener');
+  });
+}
+
 test.describe('distributed notebook rendering', () => {
   test('streams terminal output, isolates ranks, and reconnects', async ({
     page
@@ -333,6 +355,19 @@ test.describe('distributed notebook rendering', () => {
     await expect(processInput).toHaveCount(1);
     await expect(processInput).toHaveValue('2', { timeout: 30000 });
     await expect(processInput).toBeEnabled({ timeout: 30000 });
+    const toolbarOrder = await notebookToolbarOrder(page);
+    const debuggerIndex = toolbarOrder.indexOf('debugger-icon');
+    const kernelIndex = toolbarOrder.indexOf('kernelName');
+    const processesIndex = toolbarOrder.indexOf(
+      'jupyter-distributed-processes'
+    );
+    const progressIndex = toolbarOrder.indexOf('executionProgress');
+    expect(debuggerIndex).toBeGreaterThanOrEqual(0);
+    expect(kernelIndex).toBeGreaterThan(debuggerIndex);
+    expect(processesIndex).toBeGreaterThan(kernelIndex);
+    if (progressIndex >= 0) {
+      expect(progressIndex).toBeGreaterThan(processesIndex);
+    }
 
     const reconnectedCell = await addCodeCell(
       page,
