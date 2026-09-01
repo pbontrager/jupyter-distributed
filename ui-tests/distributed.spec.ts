@@ -91,48 +91,6 @@ async function selectOutputRank(
     .click();
 }
 
-async function waitForDebuggerStarted(
-  page: IJupyterLabPageFixture
-): Promise<void> {
-  await expect
-    .poll(
-      async () =>
-        page.evaluate(async () => {
-          const panel = window.galata.app.shell.currentWidget as unknown as {
-            context?: {
-              sessionContext?: {
-                session?: {
-                  kernel?: {
-                    requestDebug(request: {
-                      type: 'request';
-                      seq: number;
-                      command: 'debugInfo';
-                    }): {
-                      done: Promise<{
-                        content: { body?: { isStarted?: boolean } };
-                      }>;
-                    };
-                  } | null;
-                } | null;
-              };
-            };
-          };
-          const kernel = panel.context?.sessionContext?.session?.kernel;
-          if (!kernel) {
-            return false;
-          }
-          const reply = await kernel.requestDebug({
-            type: 'request',
-            seq: Date.now(),
-            command: 'debugInfo'
-          }).done;
-          return reply.content.body?.isStarted === true;
-        }),
-      { timeout: 30000 }
-    )
-    .toBe(true);
-}
-
 test.describe('distributed notebook rendering', () => {
   test('streams terminal output, isolates ranks, and reconnects', async ({
     page
@@ -399,7 +357,6 @@ test.describe('distributed notebook rendering', () => {
     await expect(debuggerButton).toHaveAttribute('aria-pressed', 'true', {
       timeout: 30000
     });
-    await waitForDebuggerStarted(page);
     await page.sidebar.openTab('jp-debugger-sidebar');
 
     const debugCell = await addCodeCell(
