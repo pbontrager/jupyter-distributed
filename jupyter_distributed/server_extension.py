@@ -51,11 +51,20 @@ class KernelWorldSizeHandler(APIHandler):
     async def post(self, kernel_id: str) -> None:
         body = self.get_json_body() or {}
         try:
-            world_size = body["world_size"]
-            model = await self.coordinator.set_world_size(kernel_id, world_size)
+            action = body.get("action", "set")
+            if action == "prepare":
+                model = await self.coordinator.prepare_world_size(kernel_id, body["world_size"])
+            elif action in {"commit", "abort"}:
+                model = await self.coordinator.finish_prepared_restart(
+                    kernel_id, body["restart_token"], commit=action == "commit"
+                )
+            elif action == "set":
+                model = await self.coordinator.set_world_size(kernel_id, body["world_size"])
+            else:
+                raise ValueError(f"Unknown action: {action}")
         except KeyError as error:
-            if error.args and error.args[0] == "world_size":
-                raise web.HTTPError(400, "world_size is required") from error
+            if error.args and error.args[0] in {"world_size", "restart_token"}:
+                raise web.HTTPError(400, f"{error.args[0]} is required") from error
             raise web.HTTPError(404, f"Kernel does not exist: {kernel_id}") from error
         except (TypeError, ValueError) as error:
             raise web.HTTPError(400, str(error)) from error

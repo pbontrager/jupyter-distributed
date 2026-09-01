@@ -21,7 +21,7 @@
     "clean:lib": "rimraf lib tsconfig.tsbuildinfo",
     "clean:labextension": "rimraf jupyter_distributed/labextension",
     "develop": "yarn build && uv run jupyter-builder develop . --overwrite",
-    "test:browser": "yarn build:lib && yarn build:labextension && uv run jupyter-builder develop . --overwrite && playwright test"
+    "test:browser": "tsc -p ui-tests/tsconfig.json && yarn build:lib && yarn build:labextension && uv run jupyter-builder develop . --overwrite && playwright test"
   },
   "dependencies": {
     "@jupyterlab/application": "^4.0.0",
@@ -51,7 +51,7 @@
     "outputDir": "jupyter_distributed/labextension",
     "schemaDir": "schema",
     "_build": {
-      "load": "static/remoteEntry.5cf2d288c1551f60.js",
+      "load": "static/remoteEntry.90012de553e3313d.js",
       "extension": "./extension",
       "style": "./style"
     }

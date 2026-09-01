@@ -72,10 +72,8 @@ export class DebuggerRankSelector extends Widget {
     sender: IDebugger,
     event: IDebugger.ISession.Event
   ): void {
-    if (event.event === 'stopped') {
+    if (event.event === 'stopped' || event.event === 'continued') {
       void this._refresh();
-    } else if (event.event === 'continued') {
-      this._select.disabled = true;
     } else if (event.event === 'terminated') {
       this._onSessionChanged();
     }
@@ -115,6 +113,8 @@ export class DebuggerRankSelector extends Widget {
         });
       }
       if (rankThreads.length === 0) {
+        this._debugger.model.stoppedThreads.clear();
+        this._debugger.model.callstack.frames = [];
         return;
       }
 

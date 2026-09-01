@@ -297,6 +297,7 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
                 stopped_threads.append(message["content"]["body"]["threadId"])
 
         debug_info = await debug_through_proxy(client, 5, "debugInfo")
+        assert debug_info["body"]["isStarted"] is True
         assert set(debug_info["body"]["stoppedThreads"]) == set(stopped_threads)
         threads = await debug_through_proxy(client, 6, "threads")
         assert {
@@ -330,11 +331,12 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
                 "variables",
                 {"variablesReference": scopes["body"]["scopes"][0]["variablesReference"]},
             )
-            rank_values.update(
+            current_rank_values = {
                 variable["value"]
                 for variable in variables["body"]["variables"]
                 if variable["name"] == "debug_value"
-            )
+            }
+            rank_values.update(current_rank_values)
             evaluated = await debug_through_proxy(
                 client,
                 sequence + 30,
@@ -346,8 +348,34 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
                 },
             )
             evaluated_values.add(evaluated["body"]["result"])
+            if "1" in current_rank_values:
+                assigned = await debug_through_proxy(
+                    client,
+                    sequence + 40,
+                    "evaluate",
+                    {
+                        "expression": "debug_value += 1",
+                        "frameId": frames[0]["id"],
+                        "context": "repl",
+                    },
+                )
+                assert assigned["success"] is True
+                updated = await debug_through_proxy(
+                    client,
+                    sequence + 50,
+                    "evaluate",
+                    {
+                        "expression": "debug_value",
+                        "frameId": frames[0]["id"],
+                        "context": "repl",
+                    },
+                )
+                assert updated["body"]["result"] == "2"
         assert rank_values == {"0", "1"}
         assert evaluated_values == {"0", "100"}
+
+        debug_info = await debug_through_proxy(client, 60, "debugInfo")
+        assert set(debug_info["body"]["stoppedThreads"]) == set(stopped_threads)
 
         stepped = await debug_through_proxy(
             client,
@@ -400,7 +428,7 @@ async def test_server_coordinator_wraps_selected_kernel_and_standard_lifecycle(
         assert [
             rank["outputs"][-1]["content"]["data"]["text/plain"]
             for rank in debug_data[RANK_MIME]["ranks"]
-        ] == ["10", "11"]
+        ] == ["10", "12"]
 
         external_source = tmp_path / "debug_target.py"
         external_source.write_text(

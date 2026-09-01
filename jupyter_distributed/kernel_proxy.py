@@ -7,7 +7,9 @@ import html
 import os
 import signal
 import traceback
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
+from concurrent.futures import Future
+from contextvars import ContextVar
 from typing import Any, ClassVar
 from uuid import uuid4
 
@@ -23,6 +25,9 @@ from .rank_magic import RankMagicError, parse_rank_cell
 
 RANK_MIME = "application/vnd.jupyter-distributed.rank+json"
 _STREAM_UPDATE_INTERVAL = 0.05
+_ON_KERNEL_IO_LOOP: ContextVar[bool] = ContextVar(
+    "jupyter_distributed_on_kernel_io_loop", default=False
+)
 
 
 def render_plain(execution: GroupExecution, target_rank: int | None = None) -> str:
@@ -250,6 +255,29 @@ class SPMDKernel(Kernel):
             await self.group.start()
             self._process_registry.update(self.group.ranks)
 
+    async def _run_on_kernel_io_loop(self, callback: Callable[[], Awaitable[Any]]) -> Any:
+        """Run rank-group work on the one event loop that owns its async state."""
+
+        if _ON_KERNEL_IO_LOOP.get():
+            return await callback()
+        result: Future[Any] = Future()
+
+        async def invoke() -> None:
+            token = _ON_KERNEL_IO_LOOP.set(True)
+            try:
+                value = await callback()
+            except BaseException as error:
+                if not result.cancelled():
+                    result.set_exception(error)
+            else:
+                if not result.cancelled():
+                    result.set_result(value)
+            finally:
+                _ON_KERNEL_IO_LOOP.reset(token)
+
+        self.io_loop.add_callback(invoke)
+        return await asyncio.wrap_future(result)
+
     async def do_execute(
         self,
         code: str,
@@ -261,6 +289,18 @@ class SPMDKernel(Kernel):
         cell_meta: Mapping[str, Any] | None = None,
         cell_id: str | None = None,
     ) -> dict[str, Any]:
+        if not _ON_KERNEL_IO_LOOP.get():
+            return await self._run_on_kernel_io_loop(
+                lambda: self.do_execute(
+                    code,
+                    silent,
+                    store_history,
+                    user_expressions,
+                    allow_stdin,
+                    cell_meta=cell_meta,
+                    cell_id=cell_id,
+                )
+            )
         self._execution_loop = asyncio.get_running_loop()
         await self._ensure_started()
         try:
@@ -317,6 +357,8 @@ class SPMDKernel(Kernel):
         )
 
     async def do_complete(self, code: str, cursor_pos: int) -> Mapping[str, Any]:
+        if not _ON_KERNEL_IO_LOOP.get():
+            return await self._run_on_kernel_io_loop(lambda: self.do_complete(code, cursor_pos))
         await self._ensure_started()
         return await self.group.complete(code, cursor_pos)
 
@@ -327,16 +369,27 @@ class SPMDKernel(Kernel):
         detail_level: int = 0,
         omit_sections: tuple[str, ...] = (),
     ) -> Mapping[str, Any]:
+        if not _ON_KERNEL_IO_LOOP.get():
+            return await self._run_on_kernel_io_loop(
+                lambda: self.do_inspect(code, cursor_pos, detail_level, omit_sections)
+            )
         await self._ensure_started()
         return await self.group.inspect(code, cursor_pos, detail_level)
 
     async def do_is_complete(self, code: str) -> Mapping[str, Any]:
+        if not _ON_KERNEL_IO_LOOP.get():
+            return await self._run_on_kernel_io_loop(lambda: self.do_is_complete(code))
         await self._ensure_started()
         return await self.group.is_complete(code)
 
     async def kernel_info_request(self, stream: Any, ident: Any, parent: Mapping[str, Any]) -> None:
         """Report the selected base kernel's language and protocol metadata."""
 
+        if not _ON_KERNEL_IO_LOOP.get():
+            await self._run_on_kernel_io_loop(
+                lambda: self.kernel_info_request(stream, ident, parent)
+            )
+            return
         if self.session is None:
             return
         await self._ensure_started()
@@ -355,24 +408,38 @@ class SPMDKernel(Kernel):
     async def do_debug_request(self, msg: Mapping[str, Any]) -> dict[str, Any]:
         """Route one Jupyter Debug Adapter Protocol request across the ranks."""
 
+        if not _ON_KERNEL_IO_LOOP.get():
+            return await self._run_on_kernel_io_loop(lambda: self.do_debug_request(msg))
         await self._ensure_started()
         return await self._debugger.request(msg)
 
     async def comm_open(self, stream: Any, ident: Any, parent: Mapping[str, Any]) -> None:
+        if not _ON_KERNEL_IO_LOOP.get():
+            await self._run_on_kernel_io_loop(lambda: self.comm_open(stream, ident, parent))
+            return
         await self._ensure_started()
         await self._comms.handle_frontend("comm_open", parent)
 
     async def comm_msg(self, stream: Any, ident: Any, parent: Mapping[str, Any]) -> None:
+        if not _ON_KERNEL_IO_LOOP.get():
+            await self._run_on_kernel_io_loop(lambda: self.comm_msg(stream, ident, parent))
+            return
         await self._ensure_started()
         await self._comms.handle_frontend("comm_msg", parent)
 
     async def comm_close(self, stream: Any, ident: Any, parent: Mapping[str, Any]) -> None:
+        if not _ON_KERNEL_IO_LOOP.get():
+            await self._run_on_kernel_io_loop(lambda: self.comm_close(stream, ident, parent))
+            return
         await self._ensure_started()
         await self._comms.handle_frontend("comm_close", parent)
 
     async def comm_info_request(self, stream: Any, ident: Any, parent: Mapping[str, Any]) -> None:
         """Report comms across every rank so frontend state can reconnect."""
 
+        if not _ON_KERNEL_IO_LOOP.get():
+            await self._run_on_kernel_io_loop(lambda: self.comm_info_request(stream, ident, parent))
+            return
         if self.session is None:
             return
         await self._ensure_started()
@@ -382,6 +449,8 @@ class SPMDKernel(Kernel):
         self.session.send(stream, "comm_info_reply", content, parent, ident)
 
     async def do_shutdown(self, restart: bool) -> dict[str, Any]:
+        if not _ON_KERNEL_IO_LOOP.get():
+            return await self._run_on_kernel_io_loop(lambda: self.do_shutdown(restart))
         ranks = self.group.ranks
         try:
             await self.group.shutdown(now=True)
@@ -395,11 +464,17 @@ class SPMDKernel(Kernel):
         return {"status": "ok", "restart": restart}
 
     async def interrupt_group(self) -> None:
+        if not _ON_KERNEL_IO_LOOP.get():
+            await self._run_on_kernel_io_loop(self.interrupt_group)
+            return
         await self.group.interrupt()
 
     async def interrupt_request(self, stream: Any, ident: Any, parent: Mapping[str, Any]) -> None:
         """Handle Jupyter's message-mode interrupt as a group operation."""
 
+        if not _ON_KERNEL_IO_LOOP.get():
+            await self._run_on_kernel_io_loop(lambda: self.interrupt_request(stream, ident, parent))
+            return
         if self.session is None:
             return
         try:

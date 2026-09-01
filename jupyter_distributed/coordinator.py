@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import uuid
 from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +27,14 @@ class DistributedKernelState:
     original_cwd: str | None
     world_size: int = 1
     proxied: bool = False
+
+
+@dataclass(slots=True)
+class PreparedKernelRestart:
+    """A proxy launch configuration awaiting a client-managed restart."""
+
+    token: str
+    world_size: int
 
 
 class KernelLaunchAdapter:
@@ -108,6 +117,7 @@ class DistributedKernelCoordinator:
             registry_dir or Path(jupyter_runtime_dir()) / "jupyter-distributed"
         )
         self._states: dict[str, DistributedKernelState] = {}
+        self._prepared_restarts: dict[str, PreparedKernelRestart] = {}
         self._locks: dict[str, asyncio.Lock] = {}
 
     def describe(self, kernel_id: str) -> dict[str, Any]:
@@ -122,19 +132,14 @@ class DistributedKernelCoordinator:
         }
 
     async def set_world_size(self, kernel_id: str, world_size: int) -> dict[str, Any]:
-        if isinstance(world_size, bool) or not isinstance(world_size, int):
-            raise TypeError("world_size must be an integer")
-        if world_size < 1:
-            raise ValueError("world_size must be greater than zero")
+        self._validate_world_size(world_size)
 
         lock = self._locks.setdefault(kernel_id, asyncio.Lock())
         async with lock:
             await self.reaper.reap()
             kernel = self._kernel(kernel_id)
-            state = self._states.get(kernel_id)
-            if state is None:
-                state = self.launch_adapter.capture(kernel)
-                self._states[kernel_id] = state
+            state = self._state(kernel_id, kernel)
+            self._cancel_prepared_restart(kernel_id, kernel, state)
             if state.proxied and state.world_size == world_size:
                 return self.describe(kernel_id)
 
@@ -162,9 +167,82 @@ class DistributedKernelCoordinator:
             state.proxied = True
             return self.describe(kernel_id)
 
+    async def prepare_world_size(self, kernel_id: str, world_size: int) -> dict[str, Any]:
+        """Configure the next launch for a restart performed by the client."""
+
+        self._validate_world_size(world_size)
+        lock = self._locks.setdefault(kernel_id, asyncio.Lock())
+        async with lock:
+            await self.reaper.reap()
+            kernel = self._kernel(kernel_id)
+            state = self._state(kernel_id, kernel)
+            self._cancel_prepared_restart(kernel_id, kernel, state)
+            if state.proxied and state.world_size == world_size:
+                return {**self.describe(kernel_id), "restart_required": False}
+
+            self.launch_adapter.configure_proxy(
+                kernel, state, world_size, self.reaper.path_for(kernel_id)
+            )
+            prepared = PreparedKernelRestart(str(uuid.uuid4()), world_size)
+            self._prepared_restarts[kernel_id] = prepared
+            return {
+                **self.describe(kernel_id),
+                "world_size": world_size,
+                "proxied": True,
+                "restart_required": True,
+                "restart_token": prepared.token,
+            }
+
+    async def finish_prepared_restart(
+        self, kernel_id: str, token: str, *, commit: bool
+    ) -> dict[str, Any]:
+        """Commit or roll back a client-managed kernel restart."""
+
+        lock = self._locks.setdefault(kernel_id, asyncio.Lock())
+        async with lock:
+            kernel = self._kernel(kernel_id)
+            state = self._state(kernel_id, kernel)
+            prepared = self._prepared_restarts.get(kernel_id)
+            if prepared is None or prepared.token != token:
+                raise ValueError("Unknown or expired kernel restart token")
+            if commit:
+                state.world_size = prepared.world_size
+                state.proxied = True
+                self._prepared_restarts.pop(kernel_id, None)
+            else:
+                self._cancel_prepared_restart(kernel_id, kernel, state)
+            return self.describe(kernel_id)
+
     def forget(self, kernel_id: str) -> None:
         self._states.pop(kernel_id, None)
+        self._prepared_restarts.pop(kernel_id, None)
         self._locks.pop(kernel_id, None)
+
+    def _state(self, kernel_id: str, kernel: Any) -> DistributedKernelState:
+        state = self._states.get(kernel_id)
+        if state is None:
+            state = self.launch_adapter.capture(kernel)
+            self._states[kernel_id] = state
+        return state
+
+    def _cancel_prepared_restart(
+        self, kernel_id: str, kernel: Any, state: DistributedKernelState
+    ) -> None:
+        if self._prepared_restarts.pop(kernel_id, None) is None:
+            return
+        if state.proxied:
+            self.launch_adapter.configure_proxy(
+                kernel, state, state.world_size, self.reaper.path_for(kernel_id)
+            )
+        else:
+            self.launch_adapter.configure_direct(kernel, state)
+
+    @staticmethod
+    def _validate_world_size(world_size: int) -> None:
+        if isinstance(world_size, bool) or not isinstance(world_size, int):
+            raise TypeError("world_size must be an integer")
+        if world_size < 1:
+            raise ValueError("world_size must be greater than zero")
 
     def _kernel(self, kernel_id: str) -> Any:
         return self.kernel_manager.get_kernel(kernel_id)

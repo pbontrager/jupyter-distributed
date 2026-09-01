@@ -102,6 +102,45 @@ async def test_accepts_arbitrary_positive_process_count() -> None:
     assert manager.kernel._launch_args["env"]["JUPYTER_DISTRIBUTED_WORLD_SIZE"] == "257"
 
 
+@pytest.mark.asyncio
+async def test_client_managed_restart_can_be_committed_or_rolled_back(tmp_path: Any) -> None:
+    manager = FakeKernelManager()
+    coordinator = DistributedKernelCoordinator(manager, registry_dir=tmp_path)
+
+    prepared = await coordinator.prepare_world_size("kernel-id", 2)
+
+    assert prepared["restart_required"] is True
+    assert prepared["world_size"] == 2
+    assert manager.restarts == 0
+    assert manager.kernel._launch_args["env"]["JUPYTER_DISTRIBUTED_WORLD_SIZE"] == "2"
+    assert coordinator.describe("kernel-id")["proxied"] is False
+
+    rolled_back = await coordinator.finish_prepared_restart(
+        "kernel-id", prepared["restart_token"], commit=False
+    )
+
+    assert rolled_back["proxied"] is False
+    assert manager.kernel.kernel_spec.argv == [
+        "python",
+        "-m",
+        "ipykernel_launcher",
+        "-f",
+        "{connection_file}",
+    ]
+
+    prepared = await coordinator.prepare_world_size("kernel-id", 3)
+    committed = await coordinator.finish_prepared_restart(
+        "kernel-id", prepared["restart_token"], commit=True
+    )
+
+    assert committed["proxied"] is True
+    assert committed["world_size"] == 3
+    assert manager.restarts == 0
+
+    unchanged = await coordinator.prepare_world_size("kernel-id", 3)
+    assert unchanged["restart_required"] is False
+
+
 def test_launch_adapter_rejects_incompatible_kernel_manager() -> None:
     kernel = FakeKernel()
     kernel._launch_args = None  # type: ignore[assignment]

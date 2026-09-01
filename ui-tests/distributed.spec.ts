@@ -3,6 +3,12 @@ import {
   test,
   type IJupyterLabPageFixture
 } from '@jupyterlab/galata';
+import type { Locator } from '@playwright/test';
+
+// These tests exercise real kernel restarts. Galata's in-memory kernel tracker
+// rewrites successful kernel POST responses to 201, but Jupyter's restart API
+// returns (and @jupyterlab/services requires) 200.
+test.use({ kernels: null });
 
 async function setProcesses(
   page: IJupyterLabPageFixture,
@@ -26,19 +32,105 @@ async function createDistributedNotebook(
   page: IJupyterLabPageFixture,
   name: string
 ): Promise<void> {
-  expect(await page.notebook.createNew(name)).toBe(name);
+  expect(await page.notebook.createNew(name, { kernel: 'python3' })).toBe(name);
   await setProcesses(page, 2);
+  expect(await page.notebook.save()).toBe(true);
+}
+
+async function addCodeCell(
+  page: IJupyterLabPageFixture,
+  source: string
+): Promise<number> {
+  const index = await page.notebook.getCellCount();
+  expect(index).toBeGreaterThanOrEqual(0);
+  expect(await page.notebook.addCell('code', '')).toBe(true);
+  await setCodeCell(page, index, source);
+  return index;
+}
+
+async function setCodeCell(
+  page: IJupyterLabPageFixture,
+  cellIndex: number,
+  source: string
+): Promise<void> {
+  expect(
+    await page.evaluate(
+      ({ index, value }) => {
+        const galata = window.galata as typeof window.galata & {
+          setNotebookCell(
+            cellIndex: number,
+            cellType: 'code',
+            source: string
+          ): boolean;
+        };
+        return galata.setNotebookCell(index, 'code', value);
+      },
+      { index: cellIndex, value: source }
+    )
+  ).toBe(true);
+}
+
+async function cellOutput(
+  page: IJupyterLabPageFixture,
+  cellIndex: number
+): Promise<Locator> {
+  const cell = await page.notebook.getCellLocator(cellIndex);
+  if (!cell) {
+    throw new Error(`Notebook cell ${cellIndex} was not found.`);
+  }
+  return cell.locator('.jp-JupyterDistributedRankOutput');
 }
 
 async function selectOutputRank(
-  page: IJupyterLabPageFixture,
+  output: Locator,
   rank: number
 ): Promise<void> {
-  const output = page.locator('.jp-JupyterDistributedRankOutput');
   await output
     .locator('.lm-TabBar-tab')
     .filter({ hasText: `Rank ${rank}` })
     .click();
+}
+
+async function waitForDebuggerStarted(
+  page: IJupyterLabPageFixture
+): Promise<void> {
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(async () => {
+          const panel = window.galata.app.shell.currentWidget as unknown as {
+            context?: {
+              sessionContext?: {
+                session?: {
+                  kernel?: {
+                    requestDebug(request: {
+                      type: 'request';
+                      seq: number;
+                      command: 'debugInfo';
+                    }): {
+                      done: Promise<{
+                        content: { body?: { isStarted?: boolean } };
+                      }>;
+                    };
+                  } | null;
+                } | null;
+              };
+            };
+          };
+          const kernel = panel.context?.sessionContext?.session?.kernel;
+          if (!kernel) {
+            return false;
+          }
+          const reply = await kernel.requestDebug({
+            type: 'request',
+            seq: Date.now(),
+            command: 'debugInfo'
+          }).done;
+          return reply.content.body?.isStarted === true;
+        }),
+      { timeout: 30000 }
+    )
+    .toBe(true);
 }
 
 test.describe('distributed notebook rendering', () => {
@@ -46,18 +138,24 @@ test.describe('distributed notebook rendering', () => {
     page
   }) => {
     await createDistributedNotebook(page, 'distributed.ipynb');
+    const streamDirectory = await page.filebrowser.getCurrentDirectory();
+    const streamGatePath = [streamDirectory, 'stream-output-update.gate']
+      .filter(Boolean)
+      .join('/');
 
-    await page.notebook.setCell(
+    await setCodeCell(
+      page,
       0,
-      'code',
       [
         'import os, sys, time',
+        'from pathlib import Path',
         'rank = int(os.environ["RANK"])',
         'world_size = int(os.environ["WORLD_SIZE"])',
         'print(f"env-{rank}-{world_size}", flush=True)',
         'sys.stderr.write(f"progress-{rank}-0")',
         'sys.stderr.flush()',
-        'time.sleep(2)',
+        'while not Path("stream-output-update.gate").exists():',
+        '    time.sleep(0.05)',
         'sys.stderr.write(f"\\rprogress-{rank}-1")',
         'sys.stderr.flush()',
         'time.sleep(0.2)',
@@ -70,25 +168,31 @@ test.describe('distributed notebook rendering', () => {
 
     const output = page.locator('.jp-JupyterDistributedRankOutput');
     await expect(output).toContainText('env-0-2', { timeout: 30000 });
-    await expect(output).toContainText('progress-0-0');
+    const rankZeroOutput = output.locator(
+      '.jp-JupyterDistributedRankOutput-rank[data-rank="0"]'
+    );
+    const rankOneOutput = output.locator(
+      '.jp-JupyterDistributedRankOutput-rank[data-rank="1"]'
+    );
+    await expect(rankZeroOutput).toContainText('progress-0-0');
+    await expect(rankOneOutput).toContainText('progress-1-0');
     await expect(output).not.toContainText('end-0');
+    expect(await page.contents.uploadContent('', 'text', streamGatePath)).toBe(
+      true
+    );
     await page.notebook.waitForRun(0);
     await expect(output).toContainText('end-0');
     await expect(output).toContainText('progress-0-2');
     await expect(output).not.toContainText('progress-0-0');
     await expect(output.locator('.lm-TabBar-tab')).toHaveCount(2);
-    await selectOutputRank(page, 1);
-    const rankOneOutput = output.locator(
-      '.jp-JupyterDistributedRankOutput-rank[data-rank="1"]'
-    );
+    await selectOutputRank(output, 1);
     await expect(rankOneOutput).toBeVisible();
     await expect(rankOneOutput).toContainText('env-1-2');
     await expect(rankOneOutput).toContainText('progress-1-2');
     await expect(rankOneOutput).toContainText('end-1');
 
-    await page.notebook.setCell(
-      0,
-      'code',
+    const rankOnlyCell = await addCodeCell(
+      page,
       [
         '%%rank 1',
         'import os',
@@ -96,14 +200,14 @@ test.describe('distributed notebook rendering', () => {
         'print(f"rank-only-{rank_only}")'
       ].join('\n')
     );
-    await page.notebook.runCell(0, { inplace: true });
-    await expect(output).toContainText('rank-only-11');
-    await expect(output).not.toContainText('rank-only-10');
-    await expect(output.locator('.lm-TabBar-tab')).toHaveCount(0);
+    await page.notebook.runCell(rankOnlyCell, { inplace: true });
+    const rankOnlyOutput = await cellOutput(page, rankOnlyCell);
+    await expect(rankOnlyOutput).toContainText('rank-only-11');
+    await expect(rankOnlyOutput).not.toContainText('rank-only-10');
+    await expect(rankOnlyOutput.locator('.lm-TabBar-tab')).toHaveCount(0);
 
-    await page.notebook.setCell(
-      0,
-      'code',
+    const failedCell = await addCodeCell(
+      page,
       [
         'import os',
         'rank = int(os.environ["RANK"])',
@@ -112,21 +216,25 @@ test.describe('distributed notebook rendering', () => {
         '    raise RuntimeError("failure-rank-1")'
       ].join('\n')
     );
-    await page.notebook.runCell(0, { inplace: true });
-    await expect(output.locator('.lm-TabBar-tab')).toHaveCount(2);
-    await selectOutputRank(page, 0);
+    await page.notebook.runCell(failedCell, { inplace: true });
+    const failedOutput = await cellOutput(page, failedCell);
+    await expect(failedOutput.locator('.lm-TabBar-tab')).toHaveCount(2);
+    await selectOutputRank(failedOutput, 0);
     await expect(
-      output.locator(
+      failedOutput.locator(
         '.jp-JupyterDistributedRankOutput-rank[data-rank="0"]'
       )
     ).toContainText('state-0-missing');
-    const failedRankTab = output
+    const failedRankTab = failedOutput
       .locator('.lm-TabBar-tab')
       .filter({ hasText: 'Rank 1' });
     await expect(failedRankTab).toHaveClass(/jp-mod-error/);
     await failedRankTab.click();
-    await expect(rankOneOutput).toContainText('state-1-11');
-    await expect(rankOneOutput).toContainText('failure-rank-1');
+    const failedRankOutput = failedOutput.locator(
+      '.jp-JupyterDistributedRankOutput-rank[data-rank="1"]'
+    );
+    await expect(failedRankOutput).toContainText('state-1-11');
+    await expect(failedRankOutput).toContainText('failure-rank-1');
 
     await page.notebook.clickToolbarItem('restart');
     await page
@@ -138,7 +246,12 @@ test.describe('distributed notebook rendering', () => {
     ).toBeEnabled({ timeout: 30000 });
     expect(await page.notebook.save()).toBe(true);
 
-    await page.reload({ waitForIsReady: false });
+    const directory = await page.filebrowser.getCurrentDirectory();
+    const directoryParts = directory.split('/').filter(Boolean);
+    const notebookPath = [...directoryParts, 'distributed.ipynb'].join('/');
+    const directoryPath = directoryParts.map(encodeURIComponent).join('/');
+    await page.goto(`tree/${directoryPath}?reset`);
+    expect(await page.notebook.openByPath(notebookPath)).toBe(true);
     await expect(
       page
         .getByRole('main')
@@ -151,29 +264,36 @@ test.describe('distributed notebook rendering', () => {
     await expect(processInput).toHaveValue('2', { timeout: 30000 });
     await expect(processInput).toBeEnabled({ timeout: 30000 });
 
-    await page.notebook.setCell(0, 'code', 'import os; print(os.environ["RANK"])');
-    await page.notebook.runCell(0, { inplace: true });
-    await expect(page.locator('.jp-JupyterDistributedRankOutput')).toContainText(
-      '0'
+    const reconnectedCell = await addCodeCell(
+      page,
+      'import os; print(os.environ["RANK"])'
     );
+    await page.notebook.runCell(reconnectedCell, { inplace: true });
+    await expect(await cellOutput(page, reconnectedCell)).toContainText('0');
   });
 
   test('renders live rich display updates independently by rank', async ({
     page
   }) => {
     await createDistributedNotebook(page, 'rich-output.ipynb');
-    await page.notebook.setCell(
+    const directory = await page.filebrowser.getCurrentDirectory();
+    const gatePath = [directory, 'rich-output-update.gate']
+      .filter(Boolean)
+      .join('/');
+    await setCodeCell(
+      page,
       0,
-      'code',
       [
         'import os, time',
+        'from pathlib import Path',
         'from IPython.display import HTML, display',
         'rank = int(os.environ["RANK"])',
         'handle = display(',
         '    HTML(f\'<strong class="rank-rich">initial-{rank}</strong>\'),',
         '    display_id=True,',
         ')',
-        'time.sleep(2)',
+        'while not Path("rich-output-update.gate").exists():',
+        '    time.sleep(0.05)',
         'handle.update(HTML(f\'<strong class="rank-rich">updated-{rank}</strong>\'))'
       ].join('\n')
     );
@@ -189,24 +309,34 @@ test.describe('distributed notebook rendering', () => {
     await expect(rankZeroRichOutput).toHaveText('initial-0', {
       timeout: 30000
     });
-    await page.notebook.waitForRun(0);
-    await expect(rankZeroRichOutput).toHaveText('updated-0');
-    await expect(output).not.toContainText('initial-0');
-    await selectOutputRank(page, 1);
+    await selectOutputRank(output, 1);
     await expect(rankOneRichOutput).toBeVisible();
+    await expect(rankOneRichOutput).toHaveText('initial-1');
+    expect(await page.contents.uploadContent('', 'text', gatePath)).toBe(true);
+    await page.notebook.waitForRun(0);
     await expect(rankOneRichOutput).toHaveText('updated-1');
     await expect(output).not.toContainText('initial-1');
+    await selectOutputRank(output, 0);
+    await expect(rankZeroRichOutput).toHaveText('updated-0');
+    await expect(output).not.toContainText('initial-0');
   });
 
   test('routes debugger evaluation to the selected rank', async ({ page }) => {
     test.setTimeout(120000);
     await createDistributedNotebook(page, 'debugger.ipynb');
-    await page.debugger.switchOn('debugger.ipynb');
+    const toolbar = await page.notebook.getToolbarLocator('debugger.ipynb');
+    expect(toolbar).not.toBeNull();
+    const debuggerButton = toolbar!.locator('.jp-DebuggerBugButton');
+    await expect(debuggerButton).toBeEnabled({ timeout: 30000 });
+    await debuggerButton.click();
+    await expect(debuggerButton).toHaveAttribute('aria-pressed', 'true', {
+      timeout: 30000
+    });
+    await waitForDebuggerStarted(page);
     await page.sidebar.openTab('jp-debugger-sidebar');
 
-    await page.notebook.setCell(
-      0,
-      'code',
+    const debugCell = await addCodeCell(
+      page,
       [
         'import os',
         'rank = int(os.environ["RANK"])',
@@ -215,7 +345,7 @@ test.describe('distributed notebook rendering', () => {
         'print(a)'
       ].join('\n')
     );
-    await page.notebook.runCell(0, { inplace: true, wait: false });
+    await page.notebook.runCell(debugCell, { inplace: true, wait: false });
 
     const rankSelector = page.getByRole('combobox', {
       name: 'Distributed debugger rank'
@@ -237,22 +367,23 @@ test.describe('distributed notebook rendering', () => {
     await debugPrompt.press('Shift+Enter');
     await expect(debugPrompt).toHaveText('', { timeout: 30000 });
 
-    await page
+    const continueButton = page
       .getByRole('toolbar', { name: 'Callstack panel toolbar' })
-      .getByRole('button', { name: 'Continue', exact: true })
-      .click();
+      .getByRole('button', { name: /^Continue(?: \(F9\))?$/ });
+    await expect(continueButton).toBeEnabled({ timeout: 30000 });
+    await continueButton.click();
     await page.notebook.activate('debugger.ipynb');
-    await page.notebook.waitForRun(0);
+    await page.notebook.waitForRun(debugCell);
 
-    const output = page.locator('.jp-JupyterDistributedRankOutput');
+    const output = await cellOutput(page, debugCell);
     await expect(output.locator('.lm-TabBar-tab')).toHaveCount(2);
-    await selectOutputRank(page, 0);
+    await selectOutputRank(output, 0);
     await expect(
       output.locator(
         '.jp-JupyterDistributedRankOutput-rank[data-rank="0"]'
       )
     ).toContainText('0');
-    await selectOutputRank(page, 1);
+    await selectOutputRank(output, 1);
     await expect(
       output.locator(
         '.jp-JupyterDistributedRankOutput-rank[data-rank="1"]'

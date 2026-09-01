@@ -12,7 +12,13 @@ interface DistributedKernelModel {
   world_size: number;
   distributed: boolean;
   proxied: boolean;
+  restart_required?: boolean;
+  restart_token?: string;
 }
+
+type KernelRequestBody =
+  | { action: 'prepare'; world_size: number }
+  | { action: 'commit' | 'abort'; restart_token: string };
 
 class ProcessSelector extends Widget {
   constructor(panel: NotebookPanel) {
@@ -70,7 +76,7 @@ class ProcessSelector extends Widget {
   private _syncVisibility(): void {
     const connected = this._kernelConnected();
     this.setHidden(false);
-    this._input.disabled = !connected || this._pending;
+    this._input.disabled = !this._ready || !connected || this._pending;
     this.node.title = connected
       ? ''
       : 'Processes will be available when the notebook kernel connects.';
@@ -103,9 +109,14 @@ class ProcessSelector extends Widget {
       return;
     }
     this._ready = true;
-    this._syncVisibility();
-    if (this._kernelConnected()) {
-      await this._syncFromServer();
+    this._pending = true;
+    try {
+      if (this._kernelConnected()) {
+        await this._syncFromServer();
+      }
+    } finally {
+      this._pending = false;
+      this._syncVisibility();
     }
   }
 
@@ -136,7 +147,8 @@ class ProcessSelector extends Widget {
       this._pending = true;
       synchronizing = true;
       this._syncVisibility();
-      const restored = await this._request(kernelId, 'POST', {
+      const restored = await this._restartKernel(kernelId, {
+        action: 'prepare',
         world_size: targetWorldSize
       });
       if (kernelId === this._kernelId()) {
@@ -198,6 +210,7 @@ class ProcessSelector extends Widget {
       throw new Error('The notebook kernel is not connected.');
     }
     const previous = Number(this._input.dataset.worldSize ?? '1');
+    this._syncRequest += 1;
     this._pending = true;
     this._input.value = String(next);
     this._syncVisibility();
@@ -231,7 +244,8 @@ class ProcessSelector extends Widget {
         }
       }
 
-      const model = await this._request(kernelId, 'POST', {
+      const model = await this._restartKernel(kernelId, {
+        action: 'prepare',
         world_size: next
       });
       if (kernelId !== this._kernelId()) {
@@ -296,7 +310,7 @@ class ProcessSelector extends Widget {
   private async _request(
     kernelId: string,
     method: 'GET' | 'POST',
-    body?: { world_size: number }
+    body?: KernelRequestBody
   ): Promise<DistributedKernelModel> {
     const settings = ServerConnection.makeSettings();
     const url = URLExt.join(
@@ -319,6 +333,45 @@ class ProcessSelector extends Widget {
       throw new Error(message);
     }
     return (await response.json()) as DistributedKernelModel;
+  }
+
+  private async _restartKernel(
+    kernelId: string,
+    body: { action: 'prepare'; world_size: number }
+  ): Promise<DistributedKernelModel> {
+    const prepared = await this._request(kernelId, 'POST', body);
+    if (!prepared.restart_required) {
+      return prepared;
+    }
+    const restartToken = prepared.restart_token;
+    if (!restartToken) {
+      throw new Error('The server did not return a kernel restart token.');
+    }
+    const kernel = this._panel.sessionContext.session?.kernel;
+    if (!kernel || kernel.id !== kernelId) {
+      await this._request(kernelId, 'POST', {
+        action: 'abort',
+        restart_token: restartToken
+      });
+      throw new Error('The notebook kernel changed while setting processes.');
+    }
+    try {
+      await kernel.restart();
+    } catch (error) {
+      try {
+        await this._request(kernelId, 'POST', {
+          action: 'abort',
+          restart_token: restartToken
+        });
+      } catch (rollbackError) {
+        console.error('Unable to roll back the proxy launch configuration', rollbackError);
+      }
+      throw error;
+    }
+    return this._request(kernelId, 'POST', {
+      action: 'commit',
+      restart_token: restartToken
+    });
   }
 
   private _panel: NotebookPanel;

@@ -48,6 +48,7 @@ class DistributedDebugger:
         self._canonical_paths: dict[tuple[int, str], str] = {}
         self._event_sequence = 1
         self._initialized_event_sent = False
+        self._attached = False
 
     def set_available(self, available: bool) -> None:
         self._available = available
@@ -69,7 +70,11 @@ class DistributedDebugger:
             return await self._control_all(message)
         if command in _BROADCAST_COMMANDS:
             reply = await self._broadcast(message)
-            if command == "disconnect":
+            if command == "initialize":
+                self._attached = False
+            elif command == "attach":
+                self._attached = bool(reply.get("success", False))
+            elif command == "disconnect":
                 self._reset()
             return reply
         return await self._route_to_rank(message)
@@ -137,6 +142,15 @@ class DistributedDebugger:
         reply = self._first_reply(replies, message)
         body = reply.setdefault("body", {})
         if isinstance(body, dict):
+            body["isStarted"] = (
+                self._attached
+                and bool(replies)
+                and all(
+                    isinstance(candidate.get("body"), Mapping)
+                    and candidate["body"].get("isStarted") is True
+                    for candidate in replies.values()
+                )
+            )
             body["stoppedThreads"] = [
                 self._reference("thread", rank, thread)
                 for rank, threads in sorted(self._stopped_threads.items())
@@ -234,6 +248,12 @@ class DistributedDebugger:
 
     async def _broadcast(self, message: Mapping[str, Any]) -> dict[str, Any]:
         replies = await self._broadcast_replies(message)
+        for rank, candidate in sorted(replies.items()):
+            if not candidate.get("success", False):
+                reply = self._rewrite_reply(rank, dict(candidate))
+                detail = reply.get("message")
+                reply["message"] = f"Rank {rank}: {detail or 'debug request failed'}"
+                return reply
         return self._first_reply(replies, message)
 
     async def _broadcast_replies(self, message: Mapping[str, Any]) -> dict[int, Mapping[str, Any]]:
@@ -343,6 +363,7 @@ class DistributedDebugger:
         self._source_paths.clear()
         self._canonical_paths.clear()
         self._initialized_event_sent = False
+        self._attached = False
 
     @staticmethod
     def _source_path(reply: Mapping[str, Any]) -> str | None:
