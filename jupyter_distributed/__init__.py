@@ -7,7 +7,7 @@ from importlib.metadata import PackageNotFoundError, version
 try:
     __version__ = version("jupyter-distributed")
 except PackageNotFoundError:  # Running directly from a source checkout.
-    __version__ = "0.1.0"
+    __version__ = "0.1.1"
 
 
 def _jupyter_server_extension_points() -> list[dict[str, str]]:

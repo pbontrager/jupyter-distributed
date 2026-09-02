@@ -1,6 +1,6 @@
 {
   "name": "jupyter-distributed",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Jupyter Distributed controls and rank-aware output rendering for SPMD kernels",
   "license": "MIT",
   "author": "Jupyter Distributed contributors",

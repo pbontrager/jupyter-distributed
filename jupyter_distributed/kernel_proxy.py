@@ -419,7 +419,7 @@ class SPMDKernel(Kernel):
     """One notebook kernel whose executions fan out to persistent rank kernels."""
 
     implementation = "jupyter_distributed"
-    implementation_version = "0.1.0"
+    implementation_version = "0.1.1"
     language = "python"
     language_version = "3"
     language_info: ClassVar[dict[str, Any]] = {

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "jupyter-distributed"
-version = "0.1.0"
+version = "0.1.1"
 description = "Run a selected Jupyter kernel as persistent parallel processes"
 readme = "README.md"
 license = { file = "LICENSE" }
