@@ -53,13 +53,13 @@ activation.max().item()
 
 ```python
 %%rank 0
-%%ai
-Explain the model defined in this notebook.
+%%time
+sum(value * value for value in range(1_000_000))
 ```
 
 Only the selected rank runs the cell body or changes state. This is useful for
-rank-local inspection and for operations such as `%%ai` that should run once
-rather than independently on every process.
+rank-local inspection and for wrapping another cell magic, such as timing or
+capturing work on one process.
 
 Outputs stream while a cell is running. Standard streams, rich display data,
 display updates, output clearing, exceptions, and terminal-style progress
@@ -130,12 +130,17 @@ local agent without exposing it on the remote network.
 
 Jupyter Distributed follows the single program, multiple data (SPMD) model:
 
-- Every process receives the same cell source.
-- Each process has its own interpreter and independent variables.
-- Process state persists across cells.
+- Every ordinary cell is sent concurrently to every process. `%%rank N` is the
+  explicit exception and runs its body only on the selected rank.
+- Each process has its own kernel interpreter, namespace, and variables.
+- Process state persists across cells until the kernel group is restarted,
+  resized, shut down, or lost.
+- Outputs are collected independently and presented as rank-specific views.
 - A cell is considered complete when every process has completed, failed, or
   been interrupted.
 - Standard interrupt, restart, and shutdown actions apply to the whole group.
+- Jupyter Distributed does not add framework collectives or synchronization
+  barriers between cells.
 
 For example, set **Processes** to `2` and run:
 
@@ -176,9 +181,9 @@ workloads are flagship use cases.
 
 ### PyTorch
 
-To make `torch.distributed` convenient, each process receives these variables
-at every process count, including one:
-torchrun-compatible environment variables:
+To make `torch.distributed` convenient, each process receives these
+torchrun-compatible environment variables at every process count, including
+one:
 
 - `RANK`
 - `LOCAL_RANK`
@@ -199,9 +204,8 @@ if not dist.is_initialized():
 dist.get_rank(), dist.get_world_size()
 ```
 
-For NCCL, select the appropriate CUDA device from `LOCAL_RANK` before
-initializing the process group. The defaults may be overridden in an earlier
-cell before `init_process_group()` reads them:
+User code remains responsible for device placement and may override the
+defaults in an earlier cell before `init_process_group()` reads them:
 
 ```python
 import os
